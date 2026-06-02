@@ -1,0 +1,16 @@
+{
+  "name": "Idea Parking Lot",
+  "short_name": "Ideas",
+  "description": "Quickly dump one-line ideas, tag and search them, and use AI to branch off and connect them.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#11201d",
+  "theme_color": "#11201d",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

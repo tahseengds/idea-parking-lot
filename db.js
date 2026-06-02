@@ -1,26 +1,76 @@
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = process.env.DB_PATH || join(__dirname, "ideas.db");
 
-const db = new DatabaseSync(DB_PATH);
+// Pluggable backend. Two implementations expose the same { query, run, exec }
+// async surface:
+//   - node:sqlite   → local file, zero-config, used for local dev.
+//   - libSQL (HTTP) → Turso/libSQL, persists on serverless (Vercel).
+// Selected by whether TURSO_DATABASE_URL / LIBSQL_URL is set.
+let backend = null;
 
-// Pragmas for sane concurrent reads and durability.
-db.exec("PRAGMA journal_mode = WAL");
-db.exec("PRAGMA foreign_keys = ON");
+const LIBSQL_URL = process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "";
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS ideas (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    text       TEXT    NOT NULL,
-    tags       TEXT    NOT NULL DEFAULT '[]',  -- JSON array of strings
-    status     TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','done','archived')),
-    created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+async function makeLibsqlBackend() {
+  const { createClient } = await import("@libsql/client/web");
+  const c = createClient({
+    url: LIBSQL_URL,
+    authToken: process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN,
+  });
+  return {
+    kind: "libsql",
+    query: async (sql, params = []) => (await c.execute({ sql, args: params })).rows,
+    run: async (sql, params = []) => {
+      const r = await c.execute({ sql, args: params });
+      return {
+        lastInsertRowid: r.lastInsertRowid != null ? Number(r.lastInsertRowid) : null,
+        changes: Number(r.rowsAffected || 0),
+      };
+    },
+    exec: async (sql) => {
+      await c.execute(sql);
+    },
+  };
+}
+
+async function makeSqliteBackend() {
+  const { DatabaseSync } = await import("node:sqlite");
+  const path =
+    process.env.DB_PATH || (process.env.VERCEL ? "/tmp/ideas.db" : join(__dirname, "ideas.db"));
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  return {
+    kind: "sqlite",
+    query: (sql, params = []) => db.prepare(sql).all(...params),
+    run: (sql, params = []) => {
+      const i = db.prepare(sql).run(...params);
+      return { lastInsertRowid: Number(i.lastInsertRowid), changes: i.changes };
+    },
+    exec: (sql) => db.exec(sql),
+  };
+}
+
+export async function initDb() {
+  if (backend) return backend;
+  backend = LIBSQL_URL ? await makeLibsqlBackend() : await makeSqliteBackend();
+  await backend.exec(`
+    CREATE TABLE IF NOT EXISTS ideas (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      text       TEXT    NOT NULL,
+      tags       TEXT    NOT NULL DEFAULT '[]',
+      status     TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','done','archived')),
+      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  return backend;
+}
+
+export function dbKind() {
+  return backend ? backend.kind : "uninitialized";
+}
 
 // ---- helpers -------------------------------------------------------------
 
@@ -34,7 +84,7 @@ function rowToIdea(row) {
     tags = [];
   }
   return {
-    id: row.id,
+    id: Number(row.id),
     text: row.text,
     tags,
     status: row.status,
@@ -60,22 +110,20 @@ function normalizeTags(tags) {
 
 // ---- queries -------------------------------------------------------------
 
-const stmts = {
-  insert: db.prepare("INSERT INTO ideas (text, tags) VALUES (?, ?)"),
-  byId: db.prepare("SELECT * FROM ideas WHERE id = ?"),
-  delete: db.prepare("DELETE FROM ideas WHERE id = ?"),
-};
-
-export function createIdea({ text, tags }) {
-  const info = stmts.insert.run(text.trim(), JSON.stringify(normalizeTags(tags)));
+export async function createIdea({ text, tags }) {
+  const info = await backend.run("INSERT INTO ideas (text, tags) VALUES (?, ?)", [
+    text.trim(),
+    JSON.stringify(normalizeTags(tags)),
+  ]);
   return getIdea(Number(info.lastInsertRowid));
 }
 
-export function getIdea(id) {
-  return rowToIdea(stmts.byId.get(id));
+export async function getIdea(id) {
+  const rows = await backend.query("SELECT * FROM ideas WHERE id = ?", [id]);
+  return rowToIdea(rows[0]);
 }
 
-export function listIdeas({ search = "", tag = "", status = "" } = {}) {
+export async function listIdeas({ search = "", tag = "", status = "" } = {}) {
   const where = [];
   const params = [];
 
@@ -88,7 +136,6 @@ export function listIdeas({ search = "", tag = "", status = "" } = {}) {
     params.push(`%${search.toLowerCase()}%`);
   }
   if (tag) {
-    // tags is a JSON array; match the exact tag token within it.
     where.push("EXISTS (SELECT 1 FROM json_each(ideas.tags) WHERE json_each.value = ?)");
     params.push(tag.trim().replace(/^#/, "").toLowerCase());
   }
@@ -98,11 +145,12 @@ export function listIdeas({ search = "", tag = "", status = "" } = {}) {
     (where.length ? " WHERE " + where.join(" AND ") : "") +
     " ORDER BY (status = 'archived') ASC, datetime(created_at) DESC, id DESC";
 
-  return db.prepare(sql).all(...params).map(rowToIdea);
+  const rows = await backend.query(sql, params);
+  return rows.map(rowToIdea);
 }
 
-export function updateIdea(id, patch) {
-  const existing = getIdea(id);
+export async function updateIdea(id, patch) {
+  const existing = await getIdea(id);
   if (!existing) return null;
 
   const fields = [];
@@ -125,24 +173,24 @@ export function updateIdea(id, patch) {
 
   fields.push("updated_at = datetime('now')");
   params.push(id);
-  db.prepare(`UPDATE ideas SET ${fields.join(", ")} WHERE id = ?`).run(...params);
+  await backend.run(`UPDATE ideas SET ${fields.join(", ")} WHERE id = ?`, params);
   return getIdea(id);
 }
 
-export function deleteIdea(id) {
-  return stmts.delete.run(id).changes > 0;
+export async function deleteIdea(id) {
+  const r = await backend.run("DELETE FROM ideas WHERE id = ?", [id]);
+  return r.changes > 0;
 }
 
-export function allTags() {
-  const rows = db
-    .prepare(
-      `SELECT json_each.value AS tag, COUNT(*) AS count
-         FROM ideas, json_each(ideas.tags)
-        GROUP BY json_each.value
-        ORDER BY count DESC, tag ASC`
-    )
-    .all();
-  return rows.map((r) => ({ tag: r.tag, count: r.count }));
+export async function allTags() {
+  const rows = await backend.query(
+    `SELECT json_each.value AS tag, COUNT(*) AS count
+       FROM ideas, json_each(ideas.tags)
+      GROUP BY json_each.value
+      ORDER BY count DESC, tag ASC`,
+    []
+  );
+  return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
 }
 
 export { normalizeTags };

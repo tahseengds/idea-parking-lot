@@ -2,8 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Idea Parking Lot</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#11201d" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ideas" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -13,6 +24,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div id="offline-banner" class="offline-banner" hidden>Offline — changes won't save until you reconnect.</div>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">⌖</span>
@@ -55,7 +67,13 @@
           <button class="chip" data-status="done">Done</button>
           <button class="chip" data-status="archived">Archived</button>
         </div>
+        <button id="export-btn" class="chip" title="Export all ideas as Markdown">⤓ Export</button>
       </section>
+
+      <div class="meta-row">
+        <span id="count" class="count-line"></span>
+        <span class="hint">Press <kbd>/</kbd> to capture</span>
+      </div>
 
       <div id="tag-cloud" class="tag-cloud" aria-label="Tags"></div>
 

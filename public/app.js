@@ -176,6 +176,11 @@ async function refresh() {
   list.replaceChildren(...ideas.map(ideaCard));
   $("#empty").hidden = ideas.length > 0;
 
+  const filtered = state.search || state.tag || state.status;
+  $("#count").textContent = ideas.length
+    ? `${ideas.length} idea${ideas.length === 1 ? "" : "s"}${filtered ? " (filtered)" : ""}`
+    : "";
+
   renderTagCloud(tags);
 }
 
@@ -251,7 +256,23 @@ async function openBranch(idea) {
       body.replaceChildren(el("p", { className: "panel-note" }, "No branches came back. Try again."));
       return;
     }
-    body.replaceChildren(...branches.map((b) => suggestionCard(b)));
+
+    const cards = branches.map((b) => suggestionCard(b));
+    const saveAllBtn = el("button", { textContent: "+ Save all" });
+    saveAllBtn.addEventListener("click", async () => {
+      saveAllBtn.disabled = true;
+      let saved = 0;
+      for (const card of cards) {
+        const btn = card.querySelector(".add-btn");
+        if (btn && !btn.classList.contains("added")) {
+          btn.click();
+          saved++;
+        }
+      }
+      saveAllBtn.textContent = saved ? `Saved ${saved} ✓` : "All saved";
+    });
+    const row = el("div", { className: "save-all-row" }, saveAllBtn);
+    body.replaceChildren(row, ...cards);
   } catch (e) {
     $("#panel-body").replaceChildren(el("p", { className: "panel-note" }, e.message));
   }
@@ -390,6 +411,61 @@ $("#status-filters").addEventListener("click", (e) => {
   refresh();
 });
 
+// Export all ideas as a Markdown file.
+$("#export-btn").addEventListener("click", async () => {
+  try {
+    const ideas = await api("/api/ideas");
+    if (!ideas.length) return toast("Nothing to export yet");
+    const groups = { active: [], done: [], archived: [] };
+    for (const i of ideas) (groups[i.status] || groups.active).push(i);
+    const section = (title, items) =>
+      items.length
+        ? `\n## ${title}\n\n` +
+          items
+            .map((i) => {
+              const tags = i.tags.length ? `  _${i.tags.map((t) => "#" + t).join(" ")}_` : "";
+              return `- ${i.text}${tags}`;
+            })
+            .join("\n") +
+          "\n"
+        : "";
+    const md =
+      `# Idea Parking Lot\n\n_Exported ${new Date().toLocaleString()} — ${ideas.length} ideas_\n` +
+      section("Active", groups.active) +
+      section("Done", groups.done) +
+      section("Archived", groups.archived);
+
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: "idea-parking-lot.md" });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast("Exported");
+  } catch (e) {
+    toast(e.message, true);
+  }
+});
+
+// Quick-capture shortcut: "/" focuses the idea input from anywhere.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = document.activeElement?.tagName;
+  const editing = document.activeElement?.isContentEditable;
+  if (tag === "INPUT" || tag === "TEXTAREA" || editing) return;
+  e.preventDefault();
+  $("#idea-input").focus();
+});
+
+// Offline indicator.
+function updateOnline() {
+  $("#offline-banner").hidden = navigator.onLine;
+}
+window.addEventListener("online", updateOnline);
+window.addEventListener("offline", updateOnline);
+updateOnline();
+
 $("#panel-close").addEventListener("click", closePanel);
 $("#scrim").addEventListener("click", closePanel);
 document.addEventListener("keydown", (e) => {
@@ -397,6 +473,14 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---- boot ----------------------------------------------------------------
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      /* offline support is best-effort */
+    });
+  });
+}
 
 (async () => {
   try {
