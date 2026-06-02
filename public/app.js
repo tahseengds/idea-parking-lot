@@ -34,6 +34,11 @@ const ICONS = {
   sun:
     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+  layers: '<path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  promote: '<path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
+  send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>',
+  doc: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
 };
 
 function icon(name) {
@@ -51,6 +56,145 @@ function iconBtn(name, label, onclick, cls = "") {
   b.setAttribute("aria-label", label);
   b.append(icon(name));
   return b;
+}
+
+// ---- SSE over fetch (supports GET and POST) ------------------------------
+// handlers: { <eventName>: fn(payload), done: fn(payload), failed: fn(payload) }
+// Returns an AbortController; call .abort() to cancel.
+function streamFetch(url, { method = "GET", body, handlers = {} } = {}) {
+  const ac = new AbortController();
+  (async () => {
+    let finished = false;
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: ac.signal,
+      });
+      if (!res.ok || !res.body) {
+        let msg = `Request failed (${res.status})`;
+        try {
+          msg = (await res.json()).error || msg;
+        } catch {}
+        finished = true;
+        handlers.failed?.({ message: msg });
+        return;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let event = "message";
+          let data = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let payload = {};
+          try {
+            payload = JSON.parse(data);
+          } catch {}
+          if (event === "done") {
+            finished = true;
+            handlers.done?.(payload);
+          } else if (event === "failed") {
+            finished = true;
+            handlers.failed?.(payload);
+          } else {
+            handlers[event]?.(payload);
+          }
+        }
+      }
+      if (!finished) handlers.done?.({});
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      handlers.failed?.({ message: e.message || "Connection lost." });
+    }
+  })();
+  return ac;
+}
+
+// ---- minimal, safe Markdown renderer -------------------------------------
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function mdInline(s) {
+  let out = escapeHtml(s);
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  out = out.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return out;
+}
+function mdToHtml(md) {
+  const lines = (md || "").replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let list = null; // 'ul' | 'ol'
+  let para = [];
+  const flushPara = () => {
+    if (para.length) {
+      html.push(`<p>${para.map(mdInline).join("<br>")}</p>`);
+      para = [];
+    }
+  };
+  const closeList = () => {
+    if (list) {
+      html.push(`</${list}>`);
+      list = null;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) {
+      flushPara();
+      closeList();
+    } else if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      flushPara();
+      closeList();
+      const lvl = m[1].length;
+      html.push(`<h${lvl}>${mdInline(m[2])}</h${lvl}>`);
+    } else if (/^(\s*)([-*])\s+/.test(line)) {
+      flushPara();
+      if (list !== "ul") {
+        closeList();
+        list = "ul";
+        html.push("<ul>");
+      }
+      html.push(`<li>${mdInline(line.replace(/^\s*[-*]\s+/, ""))}</li>`);
+    } else if (/^\s*\d+\.\s+/.test(line)) {
+      flushPara();
+      if (list !== "ol") {
+        closeList();
+        list = "ol";
+        html.push("<ol>");
+      }
+      html.push(`<li>${mdInline(line.replace(/^\s*\d+\.\s+/, ""))}</li>`);
+    } else if ((m = line.match(/^>\s?(.*)$/))) {
+      flushPara();
+      closeList();
+      html.push(`<blockquote>${mdInline(m[1])}</blockquote>`);
+    } else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      flushPara();
+      closeList();
+      html.push("<hr>");
+    } else {
+      closeList();
+      para.push(line);
+    }
+  }
+  flushPara();
+  closeList();
+  return html.join("\n");
 }
 
 async function api(path, opts = {}) {
@@ -142,8 +286,10 @@ function saveView() {
 
 // ---- rendering -----------------------------------------------------------
 
-function ideaCard(idea) {
-  const card = el("div", { className: `idea status-${idea.status}` });
+const expanded = new Set(); // idea ids whose branches are shown
+
+function ideaCard(idea, depth = 0) {
+  const card = el("div", { className: `idea status-${idea.status}${depth ? " child" : ""}` });
 
   const text = el("div", { className: "idea-text", textContent: idea.text });
   text.title = "Double-click to edit";
@@ -164,13 +310,18 @@ function ideaCard(idea) {
 
   const actions = el("div", { className: "idea-actions" });
 
+  const work = el("button", { className: "work-btn", title: "Open the workspace: develop, plan, spec & chat" }, icon("layers"), "Work on");
+  work.addEventListener("click", () => openWorkspace(idea.id));
+  actions.append(work);
+
   if (state.aiEnabled) {
     actions.append(
-      iconBtn("sparkle", "Branch off related ideas", () => openBranch(idea), "accent"),
-      iconBtn("link", "Find connections to other ideas", () => openConnect(idea), "accent"),
-      el("div", { className: "spacer" })
+      iconBtn("sparkle", "Branch into developed ideas", () => openBranch(idea), "accent"),
+      iconBtn("link", "Find connections to other ideas", () => openConnect(idea), "accent")
     );
   }
+
+  actions.append(el("div", { className: "spacer" }));
 
   actions.append(
     iconBtn("edit", "Edit text & tags", () => enterEdit(idea, card)),
@@ -179,9 +330,12 @@ function ideaCard(idea) {
       : iconBtn("check", "Mark done", () => patchStatus(idea, "done")),
     idea.status === "archived"
       ? iconBtn("unarchive", "Unarchive", () => patchStatus(idea, "active"))
-      : iconBtn("archive", "Archive", () => patchStatus(idea, "archived")),
-    iconBtn("trash", "Delete", () => removeIdea(idea), "danger")
+      : iconBtn("archive", "Archive", () => patchStatus(idea, "archived"))
   );
+  if (idea.parentId != null) {
+    actions.append(iconBtn("promote", "Make a separate idea", () => makeSeparate(idea)));
+  }
+  actions.append(iconBtn("trash", "Delete", () => removeIdea(idea), "danger"));
 
   const meta = el(
     "div",
@@ -191,7 +345,45 @@ function ideaCard(idea) {
   );
 
   card.append(text, meta, actions);
+
+  // Nested branches.
+  if (idea.children && idea.children.length) {
+    const n = idea.children.length;
+    const childWrap = el("div", { className: "branch-children" });
+    const renderChildren = () => childWrap.replaceChildren(...idea.children.map((c) => ideaCard(c, depth + 1)));
+    const toggle = el(
+      "button",
+      { className: "branch-toggle" },
+      icon("layers"),
+      el("span", { textContent: `${n} branch${n === 1 ? "" : "es"}` }),
+      icon("chevron")
+    );
+    const setOpen = (open) => {
+      toggle.classList.toggle("open", open);
+      if (open) {
+        expanded.add(idea.id);
+        renderChildren();
+      } else {
+        expanded.delete(idea.id);
+        childWrap.replaceChildren();
+      }
+    };
+    toggle.addEventListener("click", () => setOpen(!expanded.has(idea.id)));
+    card.append(toggle, childWrap);
+    if (expanded.has(idea.id)) setOpen(true);
+  }
+
   return card;
+}
+
+async function makeSeparate(idea) {
+  try {
+    await api(`/api/ideas/${idea.id}`, { method: "PATCH", body: { parentId: null } });
+    toast("Now a separate idea");
+    await refresh();
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 // Replace a card's contents with an inline editor for text + tags.
@@ -355,11 +547,11 @@ function openPanel(title, sourceText) {
   $("#scrim").hidden = false;
 }
 
-let currentStream = null;
+let currentStream = null; // AbortController for the side panel
 
 function closePanel() {
   if (currentStream) {
-    currentStream.close();
+    currentStream.abort();
     currentStream = null;
   }
   $("#panel").hidden = true;
@@ -367,49 +559,37 @@ function closePanel() {
   $("#scrim").hidden = true;
 }
 
-// Open an SSE stream and route named events to handlers. `handlers` may include
-// any server event name plus `done` and `failed`.
 function streamPanel(url, handlers) {
-  if (currentStream) currentStream.close();
-  const es = new EventSource(url);
-  currentStream = es;
-  let finished = false;
-  const finish = () => {
-    finished = true;
-    es.close();
-    if (currentStream === es) currentStream = null;
-  };
-
-  for (const [name, fn] of Object.entries(handlers)) {
-    if (name === "done" || name === "failed") continue;
-    es.addEventListener(name, (ev) => fn(JSON.parse(ev.data)));
-  }
-  es.addEventListener("done", () => {
-    finish();
-    handlers.done?.();
-  });
-  es.addEventListener("failed", (ev) => {
-    finish();
-    handlers.failed?.(JSON.parse(ev.data));
-  });
-  es.onerror = () => {
-    if (finished) return;
-    finish();
-    handlers.failed?.({ message: "Connection lost." });
-  };
+  if (currentStream) currentStream.abort();
+  currentStream = streamFetch(url, { handlers });
 }
 
 function streamingTail(label) {
   return el("div", { className: "loader stream-tail" }, el("div", { className: "spinner" }), label);
 }
 
+// Build a Markdown detail body from a rich branch object.
+function branchMarkdown(b) {
+  const parts = [];
+  if (b.concept) parts.push(`## Concept\n\n${b.concept}`);
+  if (b.targetUsers) parts.push(`**Target users:** ${b.targetUsers}`);
+  if (b.coreFeatures?.length)
+    parts.push(`### Core features\n\n${b.coreFeatures.map((f) => `- ${f}`).join("\n")}`);
+  if (b.workflow) parts.push(`### Workflow\n\n${b.workflow}`);
+  if (b.technical) parts.push(`### Technical considerations\n\n${b.technical}`);
+  if (b.businessValue) parts.push(`### Business value\n\n${b.businessValue}`);
+  if (b.challenges) parts.push(`### Challenges\n\n${b.challenges}`);
+  if (b.expansion) parts.push(`### Expansion opportunities\n\n${b.expansion}`);
+  return parts.join("\n\n");
+}
+
 function openBranch(idea) {
-  openPanel("Branches", `“${idea.text}”`);
+  openPanel("Branch ideas", `From “${idea.text}”`);
   const body = $("#panel-body");
   const cards = [];
   let tail = null;
 
-  const saveAllBtn = el("button", { className: "ghost-btn" }, icon("plus"), "Save all");
+  const saveAllBtn = el("button", { className: "ghost-btn" }, icon("plus"), "Save all as branches");
   saveAllBtn.addEventListener("click", () => {
     saveAllBtn.disabled = true;
     let saved = 0;
@@ -427,10 +607,10 @@ function openBranch(idea) {
   streamPanel(`/api/ideas/${idea.id}/branch/stream`, {
     branch: (b) => {
       if (!cards.length) {
-        tail = streamingTail("generating…");
+        tail = streamingTail("developing branches…");
         body.replaceChildren(row, tail);
       }
-      const card = suggestionCard(b);
+      const card = suggestionCard(b, idea.id);
       cards.push(card);
       body.insertBefore(card, tail);
     },
@@ -449,46 +629,68 @@ function openBranch(idea) {
   });
 }
 
-function suggestionCard(b) {
-  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save");
+function field(label, value) {
+  if (!value) return null;
+  return el("div", { className: "bf" }, el("dt", { textContent: label }), el("dd", { textContent: value }));
+}
+
+function suggestionCard(b, sourceId) {
+  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save branch");
   addBtn.addEventListener("click", async () => {
     if (addBtn.classList.contains("added")) return;
     try {
-      await api("/api/ideas", { method: "POST", body: { text: b.title, tags: b.tags || [] } });
+      await api("/api/ideas", {
+        method: "POST",
+        body: { text: b.title, tags: b.tags || [], detail: branchMarkdown(b), parentId: sourceId },
+      });
       addBtn.classList.add("added");
-      addBtn.textContent = "Saved";
+      addBtn.replaceChildren(document.createTextNode("Saved as branch"));
       refresh();
     } catch (e) {
       toast(e.message, true);
     }
   });
 
+  const dl = el("dl", { className: "branch-fields" });
+  const feat = b.coreFeatures?.length
+    ? el("div", { className: "bf" }, el("dt", { textContent: "Core features" }),
+        el("dd", {}, el("ul", {}, ...b.coreFeatures.map((f) => el("li", { textContent: f })))))
+    : null;
+  for (const node of [
+    field("Target users", b.targetUsers),
+    feat,
+    field("Workflow", b.workflow),
+    field("Technical", b.technical),
+    field("Business value", b.businessValue),
+    field("Challenges", b.challenges),
+    field("Expansion", b.expansion),
+  ]) {
+    if (node) dl.append(node);
+  }
+
   return el(
     "div",
     { className: "suggestion" },
     el("h3", { textContent: b.title }),
-    el("p", { textContent: b.detail }),
+    el("p", { className: "concept", textContent: b.concept }),
+    dl,
     el(
       "div",
       { className: "sug-foot" },
-      el(
-        "div",
-        { className: "sug-tags" },
-        ...(b.tags || []).map((t) => el("span", { className: "t", textContent: "#" + t }))
-      ),
+      el("div", { className: "sug-tags" }, ...(b.tags || []).map((t) => el("span", { className: "t", textContent: "#" + t }))),
       addBtn
     )
   );
 }
 
 function synthesisCard(text) {
-  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save this");
+  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save as idea");
   addBtn.addEventListener("click", async () => {
     if (addBtn.classList.contains("added")) return;
     try {
       await api("/api/ideas", { method: "POST", body: { text, tags: ["synthesis"] } });
       addBtn.classList.add("added");
-      addBtn.textContent = "Saved";
+      addBtn.replaceChildren(document.createTextNode("Saved"));
       refresh();
     } catch (e) {
       toast(e.message, true);
@@ -504,7 +706,7 @@ function synthesisCard(text) {
 }
 
 function openConnect(idea) {
-  openPanel("Connections", `“${idea.text}”`);
+  openPanel("Connections", `For “${idea.text}”`);
   const body = $("#panel-body");
   let tail = streamingTail("looking for links…");
   body.replaceChildren(tail);
@@ -542,6 +744,225 @@ function openConnect(idea) {
       if (!count && !synthEl) {
         body.replaceChildren(el("p", { className: "panel-note" }, d.message || "Something went wrong."));
       }
+    },
+  });
+}
+
+// ---- Work on Idea: workspace ---------------------------------------------
+
+let wsStream = null; // AbortController for the active workspace stream
+let wsIdea = null;
+let wsData = { messages: [], artifacts: [], kinds: [], aiEnabled: false };
+let wsView = "chat"; // "chat" | "streaming" | <artifactId>
+
+async function openWorkspace(ideaId) {
+  $("#ws").hidden = false;
+  $("#ws").setAttribute("aria-hidden", "false");
+  document.body.classList.add("ws-open");
+  $("#ws-idea-title").textContent = "Loading…";
+  $("#ws-detail").replaceChildren();
+  $("#ws-actions").replaceChildren();
+  $("#ws-doc-list").replaceChildren();
+  $("#ws-view").replaceChildren(el("div", { className: "loader" }, el("div", { className: "spinner" }), "Loading…"));
+  try {
+    const data = await api(`/api/ideas/${ideaId}/workspace`);
+    wsIdea = data.idea;
+    wsData = { messages: data.messages, artifacts: data.artifacts, kinds: data.kinds, aiEnabled: data.aiEnabled };
+    $("#ws-idea-title").textContent = wsIdea.text;
+    const det = $("#ws-detail");
+    if (wsIdea.detail) {
+      det.innerHTML = mdToHtml(wsIdea.detail);
+      det.hidden = false;
+    } else {
+      det.hidden = true;
+    }
+    $("#ws-chat-input").disabled = !wsData.aiEnabled;
+    $("#ws-chat-input").placeholder = wsData.aiEnabled
+      ? "Ask about this idea, or say how to develop it…"
+      : "Set FIREWORKS_API_KEY to chat";
+    renderWsActions();
+    renderDocList();
+    setViewChat();
+  } catch (e) {
+    toast(e.message, true);
+    closeWorkspace();
+  }
+}
+
+function closeWorkspace() {
+  if (wsStream) {
+    wsStream.abort();
+    wsStream = null;
+  }
+  $("#ws").hidden = true;
+  $("#ws").setAttribute("aria-hidden", "true");
+  document.body.classList.remove("ws-open");
+}
+
+function renderWsActions() {
+  const wrap = $("#ws-actions");
+  wrap.replaceChildren(el("div", { className: "ws-actions-label", textContent: "Generate" }));
+  for (const k of wsData.kinds) {
+    const b = el("button", { className: "ws-gen-btn" }, icon("doc"), el("span", { textContent: k.title }));
+    b.disabled = !wsData.aiEnabled;
+    b.addEventListener("click", () => generateArtifact(k.kind, k.title));
+    wrap.append(b);
+  }
+  if (!wsData.aiEnabled) {
+    wrap.append(el("p", { className: "ws-note", textContent: "Set FIREWORKS_API_KEY to enable generation & chat." }));
+  }
+}
+
+function renderDocList() {
+  const list = $("#ws-doc-list");
+  if (!wsData.artifacts.length) {
+    list.replaceChildren(el("p", { className: "ws-empty", textContent: "No documents yet." }));
+    return;
+  }
+  list.replaceChildren(
+    ...wsData.artifacts.map((a) => {
+      const open = el(
+        "button",
+        { className: "ws-doc" + (wsView === a.id ? " active" : "") },
+        icon("doc"),
+        el("span", { className: "ws-doc-title", textContent: a.title }),
+        el("span", { className: "ws-doc-date", textContent: timeAgo(a.createdAt) })
+      );
+      open.addEventListener("click", () => viewDoc(a.id));
+      const del = iconBtn(
+        "trash",
+        "Delete document",
+        async () => {
+          try {
+            await api(`/api/ideas/${wsIdea.id}/artifacts/${a.id}`, { method: "DELETE" });
+            wsData.artifacts = wsData.artifacts.filter((x) => x.id !== a.id);
+            if (wsView === a.id) setViewChat();
+            renderDocList();
+          } catch (e) {
+            toast(e.message, true);
+          }
+        },
+        "danger"
+      );
+      return el("div", { className: "ws-doc-row" }, open, del);
+    })
+  );
+}
+
+function msgBubble(role, content) {
+  const bub = el("div", { className: `ws-msg ${role}` });
+  if (role === "assistant") bub.innerHTML = mdToHtml(content);
+  else bub.textContent = content;
+  return el("div", { className: `ws-msg-row ${role}` }, bub);
+}
+
+function setViewChat() {
+  wsView = "chat";
+  const view = $("#ws-view");
+  view.className = "ws-view chat";
+  const nodes = wsData.messages.map((m) => msgBubble(m.role, m.content));
+  if (!nodes.length) {
+    nodes.push(
+      el("p", { className: "ws-empty ws-hello" }, "Ask anything about this idea, or tell me how you'd like to develop it. Use the buttons on the left to generate plans, specs, and more.")
+    );
+  }
+  view.replaceChildren(...nodes);
+  view.scrollTop = view.scrollHeight;
+  renderDocList();
+}
+
+function viewDoc(id) {
+  const a = wsData.artifacts.find((x) => x.id === id);
+  if (!a) return;
+  wsView = id;
+  const view = $("#ws-view");
+  view.className = "ws-view doc";
+  const back = el("button", { className: "ws-back" }, "← Conversation");
+  back.addEventListener("click", setViewChat);
+  const doc = el("div", { className: "ws-doc-view" });
+  doc.innerHTML = mdToHtml(a.content);
+  view.replaceChildren(el("div", { className: "ws-doc-head" }, el("h3", { textContent: a.title }), back), doc);
+  view.scrollTop = 0;
+  renderDocList();
+}
+
+function generateArtifact(kind, title) {
+  if (!wsData.aiEnabled) return;
+  wsView = "streaming";
+  const view = $("#ws-view");
+  view.className = "ws-view doc";
+  const tail = streamingTail("generating…");
+  const head = el("div", { className: "ws-doc-head" }, el("h3", { textContent: title }), tail);
+  const pre = el("pre", { className: "ws-stream" });
+  view.replaceChildren(head, pre);
+  renderDocList();
+
+  let buf = "";
+  if (wsStream) wsStream.abort();
+  wsStream = streamFetch(`/api/ideas/${wsIdea.id}/artifacts`, {
+    method: "POST",
+    body: { kind },
+    handlers: {
+      token: (d) => {
+        buf += d.text;
+        pre.textContent = buf;
+        view.scrollTop = view.scrollHeight;
+      },
+      done: (d) => {
+        wsStream = null;
+        if (d.artifact) {
+          wsData.artifacts.unshift(d.artifact);
+          viewDoc(d.artifact.id);
+        }
+      },
+      failed: (d) => {
+        wsStream = null;
+        tail.remove();
+        pre.replaceChildren(el("p", { className: "ws-empty", textContent: d.message || "Generation failed." }));
+      },
+    },
+  });
+}
+
+function sendChat(message) {
+  if (!wsData.aiEnabled) return toast("AI is not configured", true);
+  setViewChat();
+  const view = $("#ws-view");
+  // Remove the hello placeholder if present.
+  if (view.querySelector(".ws-hello")) view.replaceChildren();
+  view.append(msgBubble("user", message));
+  const aRow = el("div", { className: "ws-msg-row assistant" });
+  const aBub = el("div", { className: "ws-msg assistant" });
+  aRow.append(aBub);
+  const tail = streamingTail("thinking…");
+  view.append(aRow, tail);
+  view.scrollTop = view.scrollHeight;
+
+  let buf = "";
+  if (wsStream) wsStream.abort();
+  wsStream = streamFetch(`/api/ideas/${wsIdea.id}/chat`, {
+    method: "POST",
+    body: { message },
+    handlers: {
+      user: (m) => wsData.messages.push(m),
+      token: (d) => {
+        buf += d.text;
+        aBub.textContent = buf;
+        view.scrollTop = view.scrollHeight;
+      },
+      done: (d) => {
+        wsStream = null;
+        tail.remove();
+        aBub.innerHTML = mdToHtml(buf);
+        if (d.message) wsData.messages.push(d.message);
+        view.scrollTop = view.scrollHeight;
+      },
+      failed: (d) => {
+        wsStream = null;
+        tail.remove();
+        aBub.classList.add("err");
+        aBub.textContent = d.message || "Something went wrong.";
+      },
     },
   });
 }
@@ -655,8 +1076,21 @@ updateOnline();
 
 $("#panel-close").addEventListener("click", closePanel);
 $("#scrim").addEventListener("click", closePanel);
+
+$("#ws-close").addEventListener("click", closeWorkspace);
+$("#ws-chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = $("#ws-chat-input");
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = "";
+  sendChat(msg);
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#panel").hidden) closePanel();
+  if (e.key !== "Escape") return;
+  if (!$("#ws").hidden) closeWorkspace();
+  else if (!$("#panel").hidden) closePanel();
 });
 
 // ---- theme ---------------------------------------------------------------
@@ -667,6 +1101,8 @@ const THEME_COLOR = { dark: "#0a0f1c", light: "#f4f6f9" };
 $("#brand-mark").append(icon("target"));
 $("#search-ic").append(icon("search"));
 $("#panel-close").append(icon("close"));
+$("#ws-close").append(icon("close"));
+$("#ws-chat-form button[type=submit]").append(icon("send"));
 $("#export-btn").prepend(icon("download"));
 $("#empty-ic")?.append(icon("sparkle"));
 function currentTheme() {
@@ -708,10 +1144,12 @@ if ("serviceWorker" in navigator) {
 }
 
 (async () => {
-  // Safety net: ensure the AI panel/scrim start hidden.
+  // Safety net: ensure the AI panel/scrim/workspace start hidden.
   $("#panel").hidden = true;
   $("#panel").setAttribute("aria-hidden", "true");
   $("#scrim").hidden = true;
+  $("#ws").hidden = true;
+  $("#ws").setAttribute("aria-hidden", "true");
 
   // Restore the saved view into the controls.
   $("#search").value = state.search;

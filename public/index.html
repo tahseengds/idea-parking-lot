@@ -120,6 +120,34 @@
     </aside>
     <div id="scrim" class="scrim" hidden></div>
 
+    <!-- Work on Idea workspace -->
+    <div id="ws" class="ws" hidden aria-hidden="true" role="dialog" aria-label="Idea workspace">
+      <header class="ws-head">
+        <div class="ws-titlebox">
+          <span class="ws-eyebrow">Working on</span>
+          <h2 id="ws-idea-title"></h2>
+        </div>
+        <button id="ws-close" class="icon-btn" aria-label="Close workspace"></button>
+      </header>
+      <div class="ws-body">
+        <aside class="ws-side">
+          <div id="ws-detail" class="ws-detail" hidden></div>
+          <div id="ws-actions" class="ws-actions"></div>
+          <div class="ws-docs">
+            <h3>Documents</h3>
+            <div id="ws-doc-list" class="ws-doc-list"></div>
+          </div>
+        </aside>
+        <main class="ws-main">
+          <div id="ws-view" class="ws-view chat"></div>
+          <form id="ws-chat-form" class="ws-chat-form" autocomplete="off">
+            <input id="ws-chat-input" type="text" placeholder="Ask about this idea…" aria-label="Message" />
+            <button type="submit" class="btn primary" aria-label="Send"></button>
+          </form>
+        </main>
+      </div>
+    </div>
+
     <div id="toast" class="toast" hidden></div>
 
     <script src="app.js" type="module"></script>

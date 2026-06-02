@@ -14,8 +14,9 @@ Installable as a **PWA** and deployable to **Vercel**.
 - **Search & sort** — live full-text filter with a result count; sort by newest, oldest, or A–Z.
 - **Triage** — mark ideas **done**, **archive** them, or delete (with **Undo**). Per-status counts show on the filter chips, and your search/sort/filter view is remembered between visits.
 - **Export** — download everything as a Markdown file, grouped by status.
-- **AI · Branch ✦** — get ~5 adjacent concepts for any idea, **streamed in live** as they're generated; save one or **Save all**.
-- **AI · Connect ⇄** — find non-obvious links between an idea and the rest of your lot (also streamed), plus a synthesized idea that bridges them.
+- **AI · Branch** — generate richly-developed directions (concept, target users, core features, workflow, technical considerations, business value, challenges, expansion), streamed live. Saved branches are kept as **child branches under the original idea** (expand/collapse), and a branch can be promoted to a top-level idea with **Make a separate idea**.
+- **AI · Connect** — find non-obvious links between an idea and the rest of your lot (streamed), plus a synthesized idea that bridges them.
+- **Work on Idea** — open a per-idea workspace to develop it end to end: a persistent **chat** about the idea and one-click generation of **Plan & Roadmap, Technical Spec, Business Plan, MVP Scope, Go-to-Market, and Milestones & Tasks** documents. All chat and documents are saved under that idea.
 - **Light & dark themes** — toggle in the header; remembers your choice and respects your system preference by default.
 - **PWA** — installable, with an offline-capable app shell and an offline indicator.
 

@@ -3,11 +3,6 @@ import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Pluggable backend. Two implementations expose the same { query, run, exec }
-// async surface:
-//   - node:sqlite   → local file, zero-config, used for local dev.
-//   - libSQL (HTTP) → Turso/libSQL, persists on serverless (Vercel).
-// Selected by whether TURSO_DATABASE_URL / LIBSQL_URL is set.
 let backend = null;
 let initPromise = null;
 
@@ -53,6 +48,13 @@ async function makeSqliteBackend() {
   };
 }
 
+async function addColumnIfMissing(table, column, def) {
+  const cols = await backend.query(`PRAGMA table_info(${table})`, []);
+  if (!cols.some((c) => c.name === column)) {
+    await backend.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+  }
+}
+
 export function initDb() {
   if (!initPromise) {
     initPromise = (async () => {
@@ -65,6 +67,29 @@ export function initDb() {
           status     TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','done','archived')),
           created_at TEXT    NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      // Migrations for existing databases.
+      await addColumnIfMissing("ideas", "parent_id", "INTEGER");
+      await addColumnIfMissing("ideas", "detail", "TEXT");
+
+      await backend.exec(`
+        CREATE TABLE IF NOT EXISTS artifacts (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          idea_id    INTEGER NOT NULL,
+          kind       TEXT    NOT NULL,
+          title      TEXT    NOT NULL,
+          content    TEXT    NOT NULL DEFAULT '',
+          created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await backend.exec(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          idea_id    INTEGER NOT NULL,
+          role       TEXT    NOT NULL,
+          content    TEXT    NOT NULL,
+          created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         )
       `);
       return backend;
@@ -93,6 +118,8 @@ function rowToIdea(row) {
     text: row.text,
     tags,
     status: row.status,
+    detail: row.detail || "",
+    parentId: row.parent_id != null ? Number(row.parent_id) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -113,13 +140,13 @@ function normalizeTags(tags) {
   return out;
 }
 
-// ---- queries -------------------------------------------------------------
+// ---- ideas ---------------------------------------------------------------
 
-export async function createIdea({ text, tags }) {
-  const info = await backend.run("INSERT INTO ideas (text, tags) VALUES (?, ?)", [
-    text.trim(),
-    JSON.stringify(normalizeTags(tags)),
-  ]);
+export async function createIdea({ text, tags, detail = "", parentId = null }) {
+  const info = await backend.run(
+    "INSERT INTO ideas (text, tags, detail, parent_id) VALUES (?, ?, ?, ?)",
+    [text.trim(), JSON.stringify(normalizeTags(tags)), detail || "", parentId == null ? null : Number(parentId)]
+  );
   return getIdea(Number(info.lastInsertRowid));
 }
 
@@ -134,8 +161,10 @@ const SORTS = {
   az: "LOWER(text) ASC, id ASC",
 };
 
+// Returns top-level ideas (parent_id IS NULL) matching the filters, each with a
+// nested `children` array (its branches, recursively).
 export async function listIdeas({ search = "", tag = "", status = "", sort = "newest" } = {}) {
-  const where = [];
+  const where = ["parent_id IS NULL"];
   const params = [];
 
   if (status) {
@@ -152,27 +181,32 @@ export async function listIdeas({ search = "", tag = "", status = "", sort = "ne
   }
 
   const order = SORTS[sort] || SORTS.newest;
-  const sql =
-    "SELECT * FROM ideas" +
-    (where.length ? " WHERE " + where.join(" AND ") : "") +
-    ` ORDER BY (status = 'archived') ASC, ${order}`;
+  const top = (
+    await backend.query(
+      `SELECT * FROM ideas WHERE ${where.join(" AND ")} ORDER BY (status = 'archived') ASC, ${order}`,
+      params
+    )
+  ).map(rowToIdea);
 
-  const rows = await backend.query(sql, params);
-  return rows.map(rowToIdea);
-}
+  if (!top.length) return [];
 
-export async function countByStatus() {
-  const rows = await backend.query(
-    "SELECT status, COUNT(*) AS count FROM ideas GROUP BY status",
+  const childRows = await backend.query(
+    "SELECT * FROM ideas WHERE parent_id IS NOT NULL ORDER BY datetime(created_at) ASC, id ASC",
     []
   );
-  const out = { active: 0, done: 0, archived: 0, total: 0 };
-  for (const r of rows) {
-    const n = Number(r.count);
-    if (r.status in out) out[r.status] = n;
-    out.total += n;
+  const byParent = new Map();
+  for (const r of childRows) {
+    const idea = rowToIdea(r);
+    if (!byParent.has(idea.parentId)) byParent.set(idea.parentId, []);
+    byParent.get(idea.parentId).push(idea);
   }
-  return out;
+  const attach = (idea) => {
+    idea.children = byParent.get(idea.id) || [];
+    idea.children.forEach(attach);
+    return idea;
+  };
+  top.forEach(attach);
+  return top;
 }
 
 export async function updateIdea(id, patch) {
@@ -194,6 +228,17 @@ export async function updateIdea(id, patch) {
     fields.push("status = ?");
     params.push(patch.status);
   }
+  if (typeof patch.detail === "string") {
+    fields.push("detail = ?");
+    params.push(patch.detail);
+  }
+  if ("parentId" in patch) {
+    const pid = patch.parentId == null ? null : Number(patch.parentId);
+    if (pid !== id) {
+      fields.push("parent_id = ?");
+      params.push(pid);
+    }
+  }
 
   if (!fields.length) return existing;
 
@@ -204,7 +249,23 @@ export async function updateIdea(id, patch) {
 }
 
 export async function deleteIdea(id) {
-  const r = await backend.run("DELETE FROM ideas WHERE id = ?", [id]);
+  const idea = await getIdea(id);
+  if (!idea) return false;
+
+  // Collect the id and all descendant ids.
+  const ids = [id];
+  let frontier = [id];
+  while (frontier.length) {
+    const ph = frontier.map(() => "?").join(",");
+    const kids = await backend.query(`SELECT id FROM ideas WHERE parent_id IN (${ph})`, frontier);
+    const kidIds = kids.map((k) => Number(k.id));
+    ids.push(...kidIds);
+    frontier = kidIds;
+  }
+  const ph = ids.map(() => "?").join(",");
+  await backend.run(`DELETE FROM artifacts WHERE idea_id IN (${ph})`, ids);
+  await backend.run(`DELETE FROM messages WHERE idea_id IN (${ph})`, ids);
+  const r = await backend.run(`DELETE FROM ideas WHERE id IN (${ph})`, ids);
   return r.changes > 0;
 }
 
@@ -217,6 +278,84 @@ export async function allTags() {
     []
   );
   return rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
+}
+
+export async function countByStatus() {
+  const rows = await backend.query(
+    "SELECT status, COUNT(*) AS count FROM ideas WHERE parent_id IS NULL GROUP BY status",
+    []
+  );
+  const out = { active: 0, done: 0, archived: 0, total: 0 };
+  for (const r of rows) {
+    const n = Number(r.count);
+    if (r.status in out) out[r.status] = n;
+    out.total += n;
+  }
+  return out;
+}
+
+// ---- artifacts -----------------------------------------------------------
+
+function rowToArtifact(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    ideaId: Number(row.idea_id),
+    kind: row.kind,
+    title: row.title,
+    content: row.content,
+    createdAt: row.created_at,
+  };
+}
+
+export async function createArtifact({ ideaId, kind, title, content = "" }) {
+  const info = await backend.run(
+    "INSERT INTO artifacts (idea_id, kind, title, content) VALUES (?, ?, ?, ?)",
+    [Number(ideaId), kind, title, content]
+  );
+  return getArtifact(Number(info.lastInsertRowid));
+}
+
+export async function getArtifact(id) {
+  const rows = await backend.query("SELECT * FROM artifacts WHERE id = ?", [id]);
+  return rowToArtifact(rows[0]);
+}
+
+export async function listArtifacts(ideaId) {
+  const rows = await backend.query(
+    "SELECT * FROM artifacts WHERE idea_id = ? ORDER BY datetime(created_at) DESC, id DESC",
+    [Number(ideaId)]
+  );
+  return rows.map(rowToArtifact);
+}
+
+export async function deleteArtifact(id) {
+  const r = await backend.run("DELETE FROM artifacts WHERE id = ?", [Number(id)]);
+  return r.changes > 0;
+}
+
+// ---- messages (workspace chat) -------------------------------------------
+
+function rowToMessage(row) {
+  return { id: Number(row.id), ideaId: Number(row.idea_id), role: row.role, content: row.content, createdAt: row.created_at };
+}
+
+export async function addMessage({ ideaId, role, content }) {
+  const info = await backend.run("INSERT INTO messages (idea_id, role, content) VALUES (?, ?, ?)", [
+    Number(ideaId),
+    role,
+    content,
+  ]);
+  const rows = await backend.query("SELECT * FROM messages WHERE id = ?", [Number(info.lastInsertRowid)]);
+  return rowToMessage(rows[0]);
+}
+
+export async function listMessages(ideaId) {
+  const rows = await backend.query(
+    "SELECT * FROM messages WHERE idea_id = ? ORDER BY datetime(created_at) ASC, id ASC",
+    [Number(ideaId)]
+  );
+  return rows.map(rowToMessage);
 }
 
 export { normalizeTags };

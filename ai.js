@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 
-// Fireworks AI is OpenAI-compatible. Default to the Kimi router model.
 const MODEL = process.env.MODEL || "accounts/fireworks/routers/kimi-k2p6-turbo";
 const BASE_URL = process.env.FIREWORKS_BASE_URL || "https://api.fireworks.ai/inference/v1";
 
@@ -19,80 +18,132 @@ export function aiEnabled() {
   return Boolean(apiKey());
 }
 
-const SYSTEM = `You are a creative thinking partner inside an idea parking lot — a tool where someone dumps quick, one-line ideas.
+const SYSTEM = `You are a sharp product and engineering thinking partner inside an "idea parking lot" app. You help people take a one-line idea and develop it into something concrete and buildable: branching it into rich directions, connecting it to other ideas, answering questions about it, and producing real plans, specs, and strategy documents.
 
-Your job is to help them think laterally: surface adjacent concepts they might not have considered, and find non-obvious connections between ideas they've already captured.
+Be specific, practical, and implementation-oriented. Prefer concrete detail over generic advice. Never pad with filler.`;
 
-Principles:
-- Be specific and concrete, never generic filler.
-- Favour ideas that are genuinely different angles, not restatements.
-- Keep each suggestion to a single crisp line; put the reasoning in the detail field.
-- Match the user's domain and altitude — if the idea is a product, think product; if it's research, think research.
-- Output JSON Lines: one compact JSON object per line, nothing else. No markdown, no array brackets, no prose.`;
+// ---- low-level streaming -------------------------------------------------
 
-// Parse a single streamed line into a JSON object, tolerating fences/bullets.
-function tryParseLine(line) {
-  let s = line.trim();
-  if (!s || s.startsWith("```")) return null;
-  if (!s.startsWith("{")) {
-    const i = s.indexOf("{");
-    if (i === -1) return null;
-    s = s.slice(i);
-  }
-  const last = s.lastIndexOf("}");
-  if (last !== -1) s = s.slice(0, last + 1);
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-// Stream the model's output and yield one parsed JSON object per complete line.
-async function* streamLines(userPrompt, { signal } = {}) {
+async function rawStream(messages, { signal, maxTokens = 2048, temperature = 0.7 } = {}) {
   const c = client();
   if (!c) throw new Error("AI is not configured");
-
-  const stream = await c.chat.completions.create(
-    {
-      model: MODEL,
-      max_tokens: 2048,
-      temperature: 0.7,
-      stream: true,
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: userPrompt },
-      ],
-    },
+  return c.chat.completions.create(
+    { model: MODEL, max_tokens: maxTokens, temperature, stream: true, messages },
     { signal }
   );
+}
 
-  let buf = "";
+// Stream raw text deltas (for chat and markdown documents).
+export async function* streamText(messages, opts = {}) {
+  const stream = await rawStream(messages, {
+    maxTokens: opts.maxTokens ?? 4096,
+    temperature: opts.temperature ?? 0.5,
+    signal: opts.signal,
+  });
   for await (const chunk of stream) {
-    const delta = chunk.choices?.[0]?.delta?.content || "";
-    if (!delta) continue;
-    buf += delta;
-    let nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const obj = tryParseLine(buf.slice(0, nl));
-      buf = buf.slice(nl + 1);
-      if (obj) yield obj;
+    const d = chunk.choices?.[0]?.delta?.content || "";
+    if (d) yield d;
+  }
+}
+
+// Stream a sequence of top-level JSON objects, yielding each as it completes.
+// Brace/string state machine — robust to compact or pretty-printed JSON.
+async function* streamObjects(messages, opts = {}) {
+  const stream = await rawStream(messages, {
+    maxTokens: opts.maxTokens ?? 4096,
+    temperature: opts.temperature ?? 0.8,
+    signal: opts.signal,
+  });
+  let buf = "";
+  let pos = 0;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let objStart = -1;
+
+  for await (const chunk of stream) {
+    const d = chunk.choices?.[0]?.delta?.content || "";
+    if (!d) continue;
+    buf += d;
+    while (pos < buf.length) {
+      const ch = buf[pos];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === "{") {
+        if (depth === 0) objStart = pos;
+        depth++;
+      } else if (ch === "}") {
+        if (depth > 0) {
+          depth--;
+          if (depth === 0 && objStart >= 0) {
+            try {
+              yield JSON.parse(buf.slice(objStart, pos + 1));
+            } catch {
+              /* skip malformed */
+            }
+            objStart = -1;
+          }
+        }
+      }
+      pos++;
     }
   }
-  const tail = tryParseLine(buf);
-  if (tail) yield tail;
 }
+
+// ---- branches (rich, structured) -----------------------------------------
 
 function branchPrompt(idea) {
-  return `Here is an idea I just captured:
+  const tags = idea.tags?.length ? `\nExisting tags: ${idea.tags.join(", ")}` : "";
+  return `Idea to branch from:
+"${idea.text}"${tags}${idea.detail ? `\n\nExisting detail:\n${idea.detail}` : ""}
 
-"${idea.text}"${idea.tags.length ? `\nTags: ${idea.tags.join(", ")}` : ""}
+Generate 4 distinct, deeply-developed directions this idea could branch into. Each must be a concrete, implementation-oriented concept — NOT a vague one-liner. Make them genuinely different angles.
 
-Give me exactly 5 related concepts I might not have thought of — adjacent ideas, unexpected applications, or directions this opens up. Each should stand on its own as a new idea I could save.
-
-Output exactly 5 lines, one compact JSON object per line:
-{"title":"a single crisp one-line idea","detail":"one or two sentences on why it's worthwhile and how it relates","tags":["1-3","short","lowercase"]}`;
+Return each direction as a JSON object (objects may span multiple lines) with EXACTLY these fields:
+{
+  "title": "short, specific name for this direction",
+  "concept": "2-4 sentences clearly describing what it is",
+  "targetUsers": "who it is for",
+  "coreFeatures": ["concrete feature", "concrete feature", "concrete feature"],
+  "workflow": "how it works end to end, step by step",
+  "technical": "key technical considerations: stack, architecture, data, integrations",
+  "businessValue": "why it matters and the value it creates",
+  "challenges": "the hardest parts and real risks",
+  "expansion": "where it could grow next",
+  "tags": ["3", "lowercase", "tags"]
 }
+
+Output ONLY the JSON objects, one after another. No markdown fences, no commentary.`;
+}
+
+export async function* streamBranches(idea, opts = {}) {
+  const messages = [
+    { role: "system", content: SYSTEM },
+    { role: "user", content: branchPrompt(idea) },
+  ];
+  for await (const obj of streamObjects(messages, { ...opts, maxTokens: 6000 })) {
+    if (obj && typeof obj.title === "string" && typeof obj.concept === "string") {
+      yield {
+        title: obj.title,
+        concept: obj.concept,
+        targetUsers: obj.targetUsers || "",
+        coreFeatures: Array.isArray(obj.coreFeatures) ? obj.coreFeatures.filter((x) => typeof x === "string") : [],
+        workflow: obj.workflow || "",
+        technical: obj.technical || "",
+        businessValue: obj.businessValue || "",
+        challenges: obj.challenges || "",
+        expansion: obj.expansion || "",
+        tags: Array.isArray(obj.tags) ? obj.tags.filter((t) => typeof t === "string") : [],
+      };
+    }
+  }
+}
+
+// ---- connections ---------------------------------------------------------
 
 function connectPrompt(idea, others) {
   const list = others.map((o) => `[${o.id}] ${o.text}`).join("\n");
@@ -102,36 +153,22 @@ function connectPrompt(idea, others) {
 My other ideas (each prefixed with its id):
 ${list}
 
-Identify which of my other ideas connect to the target idea in a meaningful, non-obvious way. Only include genuine connections (it's fine to return few or none). Use the exact integer ids from the list. Then, if there's a compelling combination, add ONE synthesized idea that bridges them — as the final line.
+Identify which of my other ideas connect to the target in a meaningful, non-obvious way. Only genuine connections (few or none is fine). Use the exact integer ids. Then, if compelling, add ONE synthesized idea that bridges them.
 
-Output JSON Lines, one compact object per line. For each connection:
+Output JSON objects, one after another. For each connection:
 {"type":"connection","relatedId":123,"relationship":"one sentence on the non-obvious link"}
-Optionally, as the LAST line only:
-{"type":"synthesis","text":"one new idea combining threads"}`;
+Optionally, as the LAST object:
+{"type":"synthesis","text":"one new idea combining threads"}
+No markdown, no commentary.`;
 }
 
-/**
- * Stream branch suggestions. Yields { title, detail, tags } objects.
- */
-export async function* streamBranches(idea, opts = {}) {
-  for await (const obj of streamLines(branchPrompt(idea), opts)) {
-    if (obj && typeof obj.title === "string") {
-      yield {
-        title: obj.title,
-        detail: typeof obj.detail === "string" ? obj.detail : "",
-        tags: Array.isArray(obj.tags) ? obj.tags.filter((t) => typeof t === "string") : [],
-      };
-    }
-  }
-}
-
-/**
- * Stream connections. Yields { kind: "connection", relatedId, relationship }
- * and at most one { kind: "synthesis", text }.
- */
 export async function* streamConnections(idea, others, opts = {}) {
   if (!others.length) return;
-  for await (const obj of streamLines(connectPrompt(idea, others), opts)) {
+  const messages = [
+    { role: "system", content: SYSTEM },
+    { role: "user", content: connectPrompt(idea, others) },
+  ];
+  for await (const obj of streamObjects(messages, opts)) {
     if (!obj) continue;
     if (obj.type === "synthesis" && typeof obj.text === "string") {
       yield { kind: "synthesis", text: obj.text };
@@ -141,20 +178,71 @@ export async function* streamConnections(idea, others, opts = {}) {
   }
 }
 
-// ---- non-streaming wrappers (used by the plain POST endpoints) ------------
+// ---- "Work on Idea" : chat + document artifacts --------------------------
 
-export async function branchIdea(idea) {
-  const out = [];
-  for await (const b of streamBranches(idea)) out.push(b);
-  return out;
+function ideaContext(idea) {
+  let ctx = `We are developing this idea:\n\nTitle: ${idea.text}`;
+  if (idea.tags?.length) ctx += `\nTags: ${idea.tags.join(", ")}`;
+  if (idea.detail) ctx += `\n\nDetail:\n${idea.detail}`;
+  return ctx;
 }
 
-export async function connectIdea(idea, others) {
-  const connections = [];
-  let synthesis = "";
-  for await (const e of streamConnections(idea, others)) {
-    if (e.kind === "synthesis") synthesis = e.text;
-    else connections.push({ relatedId: e.relatedId, relationship: e.relationship });
-  }
-  return { connections, synthesis };
+// Free-form chat about an idea. `history` is [{role, content}], `message` is new.
+export async function* streamChat(idea, history, message, opts = {}) {
+  const messages = [
+    { role: "system", content: `${SYSTEM}\n\n${ideaContext(idea)}\n\nAnswer questions and help develop this specific idea. Use Markdown. Be concrete.` },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    { role: "user", content: message },
+  ];
+  yield* streamText(messages, { ...opts, temperature: 0.5, maxTokens: 4096 });
+}
+
+export const ARTIFACTS = {
+  plan: {
+    title: "Plan & Roadmap",
+    instruction:
+      "Produce a detailed development plan and roadmap: phases, what to build in each, sequencing, and a realistic timeline. Be concrete about scope.",
+  },
+  spec: {
+    title: "Technical Spec",
+    instruction:
+      "Write a technical specification: functional requirements, non-functional requirements, system architecture, key components, data model, main APIs/interfaces, and notable technical decisions with trade-offs.",
+  },
+  business: {
+    title: "Business Plan",
+    instruction:
+      "Write a concise business plan: problem, solution, target market and size, value proposition, business/revenue model, competition, key risks, and what success looks like.",
+  },
+  mvp: {
+    title: "MVP Scope",
+    instruction:
+      "Define a lean MVP scope: the smallest set of must-have features to validate the core value, explicitly list what is OUT of scope for v1, define success metrics, and give a rough effort estimate.",
+  },
+  gtm: {
+    title: "Go-to-Market",
+    instruction:
+      "Create a go-to-market strategy: positioning statement, target segments, messaging, acquisition channels, a concrete launch plan, and pricing approach.",
+  },
+  milestones: {
+    title: "Milestones & Tasks",
+    instruction:
+      "Break this into milestones. For each milestone: a clear goal, the concrete tasks to get there, and the deliverable that marks it done. Order them sensibly.",
+  },
+};
+
+export function artifactTitle(kind) {
+  return ARTIFACTS[kind]?.title || "Document";
+}
+
+export async function* streamArtifact(idea, kind, opts = {}) {
+  const spec = ARTIFACTS[kind];
+  if (!spec) throw new Error("Unknown document type");
+  const messages = [
+    { role: "system", content: SYSTEM },
+    {
+      role: "user",
+      content: `${ideaContext(idea)}\n\n${spec.instruction}\n\nFormat as clean, well-structured Markdown with headings. Be specific and practical — avoid generic boilerplate. Do not wrap the whole document in code fences.`,
+    },
+  ];
+  yield* streamText(messages, { ...opts, temperature: 0.55, maxTokens: 5000 });
 }

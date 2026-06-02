@@ -11,8 +11,21 @@ import {
   deleteIdea,
   allTags,
   countByStatus,
+  createArtifact,
+  listArtifacts,
+  deleteArtifact,
+  addMessage,
+  listMessages,
 } from "./db.js";
-import { aiEnabled, branchIdea, connectIdea, streamBranches, streamConnections } from "./ai.js";
+import {
+  aiEnabled,
+  streamBranches,
+  streamConnections,
+  streamChat,
+  streamArtifact,
+  artifactTitle,
+  ARTIFACTS,
+} from "./ai.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -68,11 +81,11 @@ app.get(
 app.post(
   "/api/ideas",
   wrap(async (req, res) => {
-    const { text, tags } = req.body || {};
+    const { text, tags, detail, parentId } = req.body || {};
     if (typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "An idea needs some text." });
     }
-    res.status(201).json(await createIdea({ text, tags: tags || [] }));
+    res.status(201).json(await createIdea({ text, tags: tags || [], detail: detail || "", parentId: parentId ?? null }));
   })
 );
 
@@ -94,48 +107,20 @@ app.delete(
   })
 );
 
-// ---- AI ------------------------------------------------------------------
-
-app.post(
-  "/api/ideas/:id/branch",
-  wrap(async (req, res) => {
-    if (!aiEnabled()) {
-      return res.status(503).json({ error: "AI is not configured. Set FIREWORKS_API_KEY and restart." });
-    }
-    const idea = await getIdea(Number(req.params.id));
-    if (!idea) return res.status(404).json({ error: "Idea not found." });
-    const branches = await branchIdea(idea);
-    res.json({ branches });
-  })
-);
-
-app.post(
-  "/api/ideas/:id/connect",
-  wrap(async (req, res) => {
-    if (!aiEnabled()) {
-      return res.status(503).json({ error: "AI is not configured. Set FIREWORKS_API_KEY and restart." });
-    }
-    const idea = await getIdea(Number(req.params.id));
-    if (!idea) return res.status(404).json({ error: "Idea not found." });
-
-    const all = await listIdeas({});
-    const others = all
-      .filter((o) => o.id !== idea.id && o.status !== "archived")
-      .map((o) => ({ id: o.id, text: o.text }));
-
-    const result = await connectIdea(idea, others);
-
-    const enriched = [];
-    for (const c of result.connections) {
-      const related = await getIdea(c.relatedId);
-      if (related) enriched.push({ relationship: c.relationship, idea: related });
-    }
-
-    res.json({ connections: enriched, synthesis: result.synthesis || "" });
-  })
-);
-
 // ---- AI streaming (SSE) --------------------------------------------------
+
+// Flatten the nested idea tree into a list (top-level + all descendants).
+function flattenIdeas(tree) {
+  const out = [];
+  const walk = (arr) => {
+    for (const o of arr) {
+      out.push(o);
+      if (o.children) walk(o.children);
+    }
+  };
+  walk(tree);
+  return out;
+}
 
 function sseInit(res) {
   res.set({
@@ -184,8 +169,7 @@ app.get(
       const idea = await getIdea(Number(req.params.id));
       if (!idea) throw new Error("Idea not found.");
 
-      const all = await listIdeas({});
-      const others = all
+      const others = flattenIdeas(await listIdeas({}))
         .filter((o) => o.id !== idea.id && o.status !== "archived")
         .map((o) => ({ id: o.id, text: o.text }));
 
@@ -203,6 +187,103 @@ app.get(
       if (!ac.signal.aborted && !res.writableEnded) sseSend(res, "failed", { message: e.message });
     }
     if (!res.writableEnded) res.end();
+  })
+);
+
+// ---- Work on Idea: workspace, chat, documents ----------------------------
+
+app.get(
+  "/api/ideas/:id/workspace",
+  wrap(async (req, res) => {
+    const idea = await getIdea(Number(req.params.id));
+    if (!idea) return res.status(404).json({ error: "Idea not found." });
+    const [messages, artifacts] = await Promise.all([
+      listMessages(idea.id),
+      listArtifacts(idea.id),
+    ]);
+    res.json({ idea, messages, artifacts, aiEnabled: aiEnabled(), kinds: kindList() });
+  })
+);
+
+function kindList() {
+  return Object.entries(ARTIFACTS).map(([kind, v]) => ({ kind, title: v.title }));
+}
+
+// Streamed chat about an idea (POST + SSE). Persists both turns.
+app.post(
+  "/api/ideas/:id/chat",
+  wrap(async (req, res) => {
+    sseInit(res);
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    try {
+      if (!aiEnabled()) throw new Error("AI is not configured. Set FIREWORKS_API_KEY.");
+      const idea = await getIdea(Number(req.params.id));
+      if (!idea) throw new Error("Idea not found.");
+      const message = (req.body?.message || "").toString().trim();
+      if (!message) throw new Error("Empty message.");
+
+      const history = await listMessages(idea.id);
+      const userMsg = await addMessage({ ideaId: idea.id, role: "user", content: message });
+      sseSend(res, "user", userMsg);
+
+      let full = "";
+      for await (const delta of streamChat(idea, history, message, { signal: ac.signal })) {
+        if (res.writableEnded) break;
+        full += delta;
+        sseSend(res, "token", { text: delta });
+      }
+      if (ac.signal.aborted) return;
+      const assistantMsg = await addMessage({ ideaId: idea.id, role: "assistant", content: full });
+      if (!res.writableEnded) sseSend(res, "done", { message: assistantMsg });
+    } catch (e) {
+      if (!ac.signal.aborted && !res.writableEnded) sseSend(res, "failed", { message: e.message });
+    }
+    if (!res.writableEnded) res.end();
+  })
+);
+
+// Streamed document generation (POST + SSE). Persists the artifact when done.
+app.post(
+  "/api/ideas/:id/artifacts",
+  wrap(async (req, res) => {
+    sseInit(res);
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    try {
+      if (!aiEnabled()) throw new Error("AI is not configured. Set FIREWORKS_API_KEY.");
+      const idea = await getIdea(Number(req.params.id));
+      if (!idea) throw new Error("Idea not found.");
+      const kind = (req.body?.kind || "").toString();
+      if (!ARTIFACTS[kind]) throw new Error("Unknown document type.");
+
+      let full = "";
+      for await (const delta of streamArtifact(idea, kind, { signal: ac.signal })) {
+        if (res.writableEnded) break;
+        full += delta;
+        sseSend(res, "token", { text: delta });
+      }
+      if (ac.signal.aborted) return;
+      const artifact = await createArtifact({
+        ideaId: idea.id,
+        kind,
+        title: artifactTitle(kind),
+        content: full,
+      });
+      if (!res.writableEnded) sseSend(res, "done", { artifact });
+    } catch (e) {
+      if (!ac.signal.aborted && !res.writableEnded) sseSend(res, "failed", { message: e.message });
+    }
+    if (!res.writableEnded) res.end();
+  })
+);
+
+app.delete(
+  "/api/ideas/:id/artifacts/:artifactId",
+  wrap(async (req, res) => {
+    const ok = await deleteArtifact(Number(req.params.artifactId));
+    if (!ok) return res.status(404).json({ error: "Document not found." });
+    res.status(204).end();
   })
 );
 
