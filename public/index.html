@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Idea Parking Lot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">⌖</span>
+        <h1>Idea Parking Lot</h1>
+      </div>
+      <p class="tagline">Dump it now. Sort it later. Let the AI pull the threads.</p>
+    </header>
+
+    <main>
+      <!-- Capture -->
+      <section class="capture card">
+        <form id="capture-form" autocomplete="off">
+          <input
+            id="idea-input"
+            name="idea"
+            type="text"
+            placeholder="What's the idea?  (press Enter to park it)"
+            aria-label="New idea"
+            maxlength="500"
+          />
+          <input
+            id="tag-input"
+            name="tags"
+            type="text"
+            placeholder="tags, comma separated"
+            aria-label="Tags"
+          />
+          <button type="submit" class="btn primary">Park it</button>
+        </form>
+      </section>
+
+      <!-- Controls -->
+      <section class="controls">
+        <div class="search-wrap">
+          <input id="search" type="search" placeholder="Search ideas…" aria-label="Search" />
+        </div>
+        <div class="filters" id="status-filters" role="tablist" aria-label="Status filter">
+          <button class="chip active" data-status="">All</button>
+          <button class="chip" data-status="active">Active</button>
+          <button class="chip" data-status="done">Done</button>
+          <button class="chip" data-status="archived">Archived</button>
+        </div>
+      </section>
+
+      <div id="tag-cloud" class="tag-cloud" aria-label="Tags"></div>
+
+      <!-- List -->
+      <section id="ideas" class="ideas" aria-live="polite"></section>
+      <p id="empty" class="empty" hidden>Nothing here yet. Park your first idea above.</p>
+    </main>
+
+    <!-- AI panel -->
+    <aside id="panel" class="panel" hidden aria-hidden="true">
+      <div class="panel-head">
+        <h2 id="panel-title">AI</h2>
+        <button id="panel-close" class="icon-btn" aria-label="Close panel">✕</button>
+      </div>
+      <p id="panel-source" class="panel-source"></p>
+      <div id="panel-body" class="panel-body"></div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
