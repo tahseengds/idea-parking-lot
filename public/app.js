@@ -436,6 +436,16 @@ function enterEdit(idea, card) {
   }
 }
 
+function skeletonCard() {
+  return el(
+    "div",
+    { className: "idea skeleton" },
+    el("div", { className: "sk-line sk-title" }),
+    el("div", { className: "sk-line sk-short" }),
+    el("div", { className: "sk-row" }, el("span", { className: "sk-pill" }), el("span", { className: "sk-pill" }), el("span", { className: "sk-spacer" }))
+  );
+}
+
 async function refresh() {
   const params = new URLSearchParams();
   if (state.search) params.set("search", state.search);
@@ -443,13 +453,26 @@ async function refresh() {
   if (state.tag) params.set("tag", state.tag);
   if (state.sort) params.set("sort", state.sort);
 
-  const [ideas, tags, stats] = await Promise.all([
-    api("/api/ideas?" + params.toString()),
-    api("/api/tags"),
-    api("/api/stats"),
-  ]);
-
+  // Show skeletons while loading if there's no real content yet (first load /
+  // empty list) — avoids flicker on incremental filter/search refreshes.
   const list = $("#ideas");
+  if (!list.querySelector(".idea:not(.skeleton)")) {
+    list.replaceChildren(...Array.from({ length: 4 }, skeletonCard));
+    $("#empty").hidden = true;
+  }
+
+  let ideas, tags, stats;
+  try {
+    [ideas, tags, stats] = await Promise.all([
+      api("/api/ideas?" + params.toString()),
+      api("/api/tags"),
+      api("/api/stats"),
+    ]);
+  } catch (e) {
+    list.replaceChildren(el("p", { className: "empty" }, e.message || "Couldn't load ideas."));
+    return;
+  }
+
   list.replaceChildren(...ideas.map(ideaCard));
   $("#empty").hidden = ideas.length > 0;
 

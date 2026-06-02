@@ -1459,3 +1459,52 @@ body.ws-open {
   flex: 1 1 760px;
   max-width: 760px;
 }
+
+/* ---- skeleton loading ---- */
+.idea.skeleton {
+  pointer-events: none;
+}
+.sk-line,
+.sk-pill {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 6px;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+.sk-title {
+  height: 15px;
+  width: 68%;
+}
+.sk-short {
+  height: 12px;
+  width: 42%;
+  margin-top: 10px;
+}
+.sk-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+}
+.sk-pill {
+  height: 18px;
+  width: 52px;
+  border-radius: 999px;
+}
+.sk-spacer {
+  flex: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sk-line,
+  .sk-pill {
+    animation: none;
+  }
+}
