@@ -10,6 +10,49 @@ const el = (tag, props = {}, ...children) => {
   return node;
 };
 
+// ---- icons (inline SVG, stroke = currentColor) ---------------------------
+
+const ICONS = {
+  target:
+    '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+  sparkle:
+    '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 14l.7 1.9 1.8.7-1.8.7L18 19l-.7-1.7-1.8-.7 1.8-.7z"/>',
+  link: '<path d="M9 12h6"/><path d="M9 7H7a5 5 0 0 0 0 10h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  undo: '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/>',
+  archive:
+    '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  unarchive:
+    '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M12 19v-7"/><path d="M9 15l3-3 3 3"/>',
+  trash:
+    '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  download: '<path d="M12 3v12"/><path d="m7 11 5 4 5-4"/><path d="M5 21h14"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  close: '<path d="M18 6 6 18"/><path d="M6 6l12 12"/>',
+  sun:
+    '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+};
+
+function icon(name) {
+  const markup =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ` +
+    `stroke="currentColor" stroke-width="2" stroke-linecap="round" ` +
+    `stroke-linejoin="round" class="icon" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  return document.importNode(doc.documentElement, true);
+}
+
+// Build an icon-only button with an accessible label/tooltip.
+function iconBtn(name, label, onclick, cls = "") {
+  const b = el("button", { className: `icon-btn ${cls}`.trim(), title: label, onclick });
+  b.setAttribute("aria-label", label);
+  b.append(icon(name));
+  return b;
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -123,46 +166,21 @@ function ideaCard(idea) {
 
   if (state.aiEnabled) {
     actions.append(
-      el("button", {
-        className: "icon-btn spark",
-        innerHTML: "✦ Branch",
-        title: "Branch off related ideas",
-        onclick: () => openBranch(idea),
-      }),
-      el("button", {
-        className: "icon-btn link",
-        innerHTML: "⇄ Connect",
-        title: "Find connections to other ideas",
-        onclick: () => openConnect(idea),
-      })
+      iconBtn("sparkle", "Branch off related ideas", () => openBranch(idea), "accent"),
+      iconBtn("link", "Find connections to other ideas", () => openConnect(idea), "accent"),
+      el("div", { className: "spacer" })
     );
   }
 
   actions.append(
-    el("button", {
-      className: "icon-btn",
-      innerHTML: "✎",
-      title: "Edit text & tags",
-      onclick: () => enterEdit(idea, card),
-    }),
-    el("button", {
-      className: "icon-btn",
-      innerHTML: idea.status === "done" ? "↺" : "✓",
-      title: idea.status === "done" ? "Mark active" : "Mark done",
-      onclick: () => patchStatus(idea, idea.status === "done" ? "active" : "done"),
-    }),
-    el("button", {
-      className: "icon-btn",
-      innerHTML: idea.status === "archived" ? "⇪" : "⇩",
-      title: idea.status === "archived" ? "Unarchive" : "Archive",
-      onclick: () => patchStatus(idea, idea.status === "archived" ? "active" : "archived"),
-    }),
-    el("button", {
-      className: "icon-btn danger",
-      innerHTML: "🗑",
-      title: "Delete",
-      onclick: () => removeIdea(idea),
-    })
+    iconBtn("edit", "Edit text & tags", () => enterEdit(idea, card)),
+    idea.status === "done"
+      ? iconBtn("undo", "Mark active", () => patchStatus(idea, "active"))
+      : iconBtn("check", "Mark done", () => patchStatus(idea, "done")),
+    idea.status === "archived"
+      ? iconBtn("unarchive", "Unarchive", () => patchStatus(idea, "active"))
+      : iconBtn("archive", "Archive", () => patchStatus(idea, "archived")),
+    iconBtn("trash", "Delete", () => removeIdea(idea), "danger")
   );
 
   const meta = el(
@@ -391,7 +409,7 @@ function openBranch(idea) {
   const cards = [];
   let tail = null;
 
-  const saveAllBtn = el("button", { textContent: "+ Save all" });
+  const saveAllBtn = el("button", { className: "ghost-btn" }, icon("plus"), "Save all");
   saveAllBtn.addEventListener("click", () => {
     saveAllBtn.disabled = true;
     let saved = 0;
@@ -402,7 +420,7 @@ function openBranch(idea) {
         saved++;
       }
     }
-    saveAllBtn.textContent = saved ? `Saved ${saved} ✓` : "All saved";
+    saveAllBtn.textContent = saved ? `Saved ${saved}` : "All saved";
   });
   const row = el("div", { className: "save-all-row" }, saveAllBtn);
 
@@ -432,13 +450,13 @@ function openBranch(idea) {
 }
 
 function suggestionCard(b) {
-  const addBtn = el("button", { className: "add-btn", textContent: "+ Save" });
+  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save");
   addBtn.addEventListener("click", async () => {
     if (addBtn.classList.contains("added")) return;
     try {
       await api("/api/ideas", { method: "POST", body: { text: b.title, tags: b.tags || [] } });
       addBtn.classList.add("added");
-      addBtn.textContent = "Saved ✓";
+      addBtn.textContent = "Saved";
       refresh();
     } catch (e) {
       toast(e.message, true);
@@ -464,13 +482,13 @@ function suggestionCard(b) {
 }
 
 function synthesisCard(text) {
-  const addBtn = el("button", { className: "add-btn", textContent: "+ Save this" });
+  const addBtn = el("button", { className: "add-btn" }, icon("plus"), "Save this");
   addBtn.addEventListener("click", async () => {
     if (addBtn.classList.contains("added")) return;
     try {
       await api("/api/ideas", { method: "POST", body: { text, tags: ["synthesis"] } });
       addBtn.classList.add("added");
-      addBtn.textContent = "Saved ✓";
+      addBtn.textContent = "Saved";
       refresh();
     } catch (e) {
       toast(e.message, true);
@@ -643,7 +661,13 @@ document.addEventListener("keydown", (e) => {
 
 // ---- theme ---------------------------------------------------------------
 
-const THEME_COLOR = { dark: "#11201d", light: "#eaece6" };
+const THEME_COLOR = { dark: "#0a0f1c", light: "#f4f6f9" };
+
+// Inject the static SVG icons that live in index.html.
+$("#brand-mark").append(icon("target"));
+$("#search-ic").append(icon("search"));
+$("#panel-close").append(icon("close"));
+$("#export-btn").prepend(icon("download"));
 function currentTheme() {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
@@ -652,7 +676,7 @@ function applyTheme(theme) {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = THEME_COLOR[theme];
   // Show the icon for the theme you'd switch TO.
-  $("#theme-toggle").textContent = theme === "light" ? "☾" : "☀";
+  $("#theme-toggle").replaceChildren(icon(theme === "light" ? "moon" : "sun"));
 }
 $("#theme-toggle").addEventListener("click", () => {
   const next = currentTheme() === "light" ? "dark" : "light";
