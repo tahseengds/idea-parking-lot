@@ -10,9 +10,9 @@ Installable as a **PWA** and deployable to **Vercel**.
 ## Features
 
 - **Quick capture** — type an idea, press Enter, it's parked. Add comma-separated tags inline. Press <kbd>/</kbd> anywhere to jump to the capture box.
-- **Tags** — click any tag (or a tag-cloud pill) to filter.
-- **Search** — live full-text filter; a result count shows what's matched.
-- **Triage** — mark ideas **done**, **archive** them, edit text inline (double-click), or delete.
+- **Tags** — click any tag (or a tag-cloud pill) to filter. Edit an idea's text **and tags** inline (✎ or double-click).
+- **Search & sort** — live full-text filter with a result count; sort by newest, oldest, or A–Z.
+- **Triage** — mark ideas **done**, **archive** them, or delete (with **Undo**). Per-status counts show on the filter chips, and your search/sort/filter view is remembered between visits.
 - **Export** — download everything as a Markdown file, grouped by status.
 - **AI · Branch ✦** — get ~5 adjacent concepts for any idea; save one or **Save all**.
 - **AI · Connect ⇄** — find non-obvious links between an idea and the rest of your lot, plus a synthesized idea that bridges them.
@@ -86,11 +86,12 @@ of the app runs normally.
 | Method   | Path                      | Description                                  |
 | -------- | ------------------------- | -------------------------------------------- |
 | `GET`    | `/api/config`             | Whether AI is enabled                        |
-| `GET`    | `/api/ideas`              | List ideas (`?search=`, `?tag=`, `?status=`) |
+| `GET`    | `/api/ideas`              | List ideas (`?search=`, `?tag=`, `?status=`, `?sort=newest\|oldest\|az`) |
 | `POST`   | `/api/ideas`              | Create `{ text, tags }`                      |
 | `PATCH`  | `/api/ideas/:id`          | Update `{ text?, tags?, status? }`           |
 | `DELETE` | `/api/ideas/:id`          | Delete an idea                               |
 | `GET`    | `/api/tags`               | All tags with counts                         |
+| `GET`    | `/api/stats`              | Idea counts by status                        |
 | `POST`   | `/api/ideas/:id/branch`   | AI: related concepts branching off           |
 | `POST`   | `/api/ideas/:id/connect`  | AI: connections to other ideas + synthesis   |
 

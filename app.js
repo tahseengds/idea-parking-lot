@@ -10,6 +10,7 @@ import {
   updateIdea,
   deleteIdea,
   allTags,
+  countByStatus,
 } from "./db.js";
 import { aiEnabled, branchIdea, connectIdea } from "./ai.js";
 
@@ -36,8 +37,8 @@ app.get("/api/config", (req, res) => {
 app.get(
   "/api/ideas",
   wrap(async (req, res) => {
-    const { search = "", tag = "", status = "" } = req.query;
-    res.json(await listIdeas({ search, tag, status }));
+    const { search = "", tag = "", status = "", sort = "newest" } = req.query;
+    res.json(await listIdeas({ search, tag, status, sort }));
   })
 );
 
@@ -45,6 +46,13 @@ app.get(
   "/api/tags",
   wrap(async (req, res) => {
     res.json(await allTags());
+  })
+);
+
+app.get(
+  "/api/stats",
+  wrap(async (req, res) => {
+    res.json(await countByStatus());
   })
 );
 

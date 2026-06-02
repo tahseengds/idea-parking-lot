@@ -32,6 +32,25 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
 
+// Toast with an inline action button (e.g. Undo).
+function toastAction(msg, label, onAction) {
+  const t = $("#toast");
+  t.classList.remove("error");
+  const btn = el("button", { className: "toast-action", textContent: label });
+  let used = false;
+  btn.addEventListener("click", () => {
+    if (used) return;
+    used = true;
+    t.hidden = true;
+    clearTimeout(toastTimer);
+    onAction();
+  });
+  t.replaceChildren(document.createTextNode(msg + " "), btn);
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 6000);
+}
+
 function timeAgo(iso) {
   const then = new Date(iso.replace(" ", "T") + "Z").getTime();
   const secs = Math.round((Date.now() - then) / 1000);
@@ -55,48 +74,37 @@ function parseTags(str) {
 
 // ---- state ---------------------------------------------------------------
 
-const state = { search: "", status: "", tag: "", aiEnabled: false };
+const SAVED = (() => {
+  try {
+    return JSON.parse(localStorage.getItem("ipl-view") || "{}");
+  } catch {
+    return {};
+  }
+})();
+
+const state = {
+  search: SAVED.search || "",
+  status: SAVED.status || "",
+  tag: SAVED.tag || "",
+  sort: SAVED.sort || "newest",
+  aiEnabled: false,
+};
+
+function saveView() {
+  localStorage.setItem(
+    "ipl-view",
+    JSON.stringify({ search: state.search, status: state.status, tag: state.tag, sort: state.sort })
+  );
+}
 
 // ---- rendering -----------------------------------------------------------
 
 function ideaCard(idea) {
-  const text = el("div", { className: "idea-text", textContent: idea.text });
+  const card = el("div", { className: `idea status-${idea.status}` });
 
-  // Inline edit on double-click.
-  text.addEventListener("dblclick", () => {
-    text.contentEditable = "true";
-    text.focus();
-    const sel = window.getSelection();
-    sel.selectAllChildren(text);
-    sel.collapseToEnd();
-  });
-  text.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      text.blur();
-    }
-    if (e.key === "Escape") {
-      text.textContent = idea.text;
-      text.blur();
-    }
-  });
-  text.addEventListener("blur", async () => {
-    if (text.contentEditable !== "true") return;
-    text.contentEditable = "false";
-    const next = text.textContent.trim();
-    if (next && next !== idea.text) {
-      try {
-        await api(`/api/ideas/${idea.id}`, { method: "PATCH", body: { text: next } });
-        idea.text = next;
-        toast("Saved");
-      } catch (e) {
-        text.textContent = idea.text;
-        toast(e.message, true);
-      }
-    } else {
-      text.textContent = idea.text;
-    }
-  });
+  const text = el("div", { className: "idea-text", textContent: idea.text });
+  text.title = "Double-click to edit";
+  text.addEventListener("dblclick", () => enterEdit(idea, card));
 
   const tags = el(
     "div",
@@ -133,6 +141,12 @@ function ideaCard(idea) {
   actions.append(
     el("button", {
       className: "icon-btn",
+      innerHTML: "✎",
+      title: "Edit text & tags",
+      onclick: () => enterEdit(idea, card),
+    }),
+    el("button", {
+      className: "icon-btn",
       innerHTML: idea.status === "done" ? "↺" : "✓",
       title: idea.status === "done" ? "Mark active" : "Mark done",
       onclick: () => patchStatus(idea, idea.status === "done" ? "active" : "done"),
@@ -158,7 +172,58 @@ function ideaCard(idea) {
     el("span", { className: "created", textContent: timeAgo(idea.createdAt) })
   );
 
-  return el("div", { className: `idea status-${idea.status}` }, text, meta, actions);
+  card.append(text, meta, actions);
+  return card;
+}
+
+// Replace a card's contents with an inline editor for text + tags.
+function enterEdit(idea, card) {
+  const textIn = el("input", { type: "text", value: idea.text, maxLength: 500 });
+  const tagsIn = el("input", {
+    type: "text",
+    value: idea.tags.join(", "),
+    placeholder: "tags, comma separated",
+  });
+  const save = el("button", { className: "edit-save", textContent: "Save" });
+  const cancel = el("button", { className: "edit-cancel", textContent: "Cancel" });
+
+  const editor = el(
+    "div",
+    { className: "idea-edit" },
+    textIn,
+    tagsIn,
+    el("div", { className: "edit-actions" }, save, cancel)
+  );
+  card.replaceChildren(editor);
+  textIn.focus();
+  textIn.setSelectionRange(textIn.value.length, textIn.value.length);
+
+  const doSave = async () => {
+    const next = textIn.value.trim();
+    if (!next) return toast("An idea needs some text", true);
+    try {
+      await api(`/api/ideas/${idea.id}`, {
+        method: "PATCH",
+        body: { text: next, tags: parseTags(tagsIn.value) },
+      });
+      await refresh();
+      toast("Saved");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  save.addEventListener("click", doSave);
+  cancel.addEventListener("click", () => refresh());
+  for (const input of [textIn, tagsIn]) {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doSave();
+      }
+      if (e.key === "Escape") refresh();
+    });
+  }
 }
 
 async function refresh() {
@@ -166,10 +231,12 @@ async function refresh() {
   if (state.search) params.set("search", state.search);
   if (state.status) params.set("status", state.status);
   if (state.tag) params.set("tag", state.tag);
+  if (state.sort) params.set("sort", state.sort);
 
-  const [ideas, tags] = await Promise.all([
+  const [ideas, tags, stats] = await Promise.all([
     api("/api/ideas?" + params.toString()),
     api("/api/tags"),
+    api("/api/stats"),
   ]);
 
   const list = $("#ideas");
@@ -181,7 +248,22 @@ async function refresh() {
     ? `${ideas.length} idea${ideas.length === 1 ? "" : "s"}${filtered ? " (filtered)" : ""}`
     : "";
 
+  updateChipCounts(stats);
   renderTagCloud(tags);
+  saveView();
+}
+
+function updateChipCounts(stats) {
+  const map = { "": stats.total, active: stats.active, done: stats.done, archived: stats.archived };
+  for (const chip of document.querySelectorAll("#status-filters .chip")) {
+    const n = map[chip.dataset.status] ?? 0;
+    let c = chip.querySelector(".chip-count");
+    if (!c) {
+      c = el("span", { className: "chip-count" });
+      chip.append(c);
+    }
+    c.textContent = n;
+  }
 }
 
 function renderTagCloud(tags) {
@@ -213,11 +295,25 @@ async function patchStatus(idea, status) {
 }
 
 async function removeIdea(idea) {
-  if (!confirm("Delete this idea?")) return;
   try {
     await api(`/api/ideas/${idea.id}`, { method: "DELETE" });
     await refresh();
-    toast("Deleted");
+    // Offer a quick undo (recreates the idea with the same text/tags/status).
+    toastAction("Deleted", "Undo", async () => {
+      try {
+        const recreated = await api("/api/ideas", {
+          method: "POST",
+          body: { text: idea.text, tags: idea.tags },
+        });
+        if (idea.status !== "active") {
+          await api(`/api/ideas/${recreated.id}`, { method: "PATCH", body: { status: idea.status } });
+        }
+        await refresh();
+        toast("Restored");
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
   } catch (e) {
     toast(e.message, true);
   }
@@ -411,6 +507,11 @@ $("#status-filters").addEventListener("click", (e) => {
   refresh();
 });
 
+$("#sort").addEventListener("change", (e) => {
+  state.sort = e.target.value;
+  refresh();
+});
+
 // Export all ideas as a Markdown file.
 $("#export-btn").addEventListener("click", async () => {
   try {
@@ -483,6 +584,11 @@ if ("serviceWorker" in navigator) {
 }
 
 (async () => {
+  // Restore the saved view into the controls.
+  $("#search").value = state.search;
+  $("#sort").value = state.sort;
+  setStatus(state.status);
+
   try {
     const cfg = await api("/api/config");
     state.aiEnabled = cfg.aiEnabled;

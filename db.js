@@ -123,7 +123,13 @@ export async function getIdea(id) {
   return rowToIdea(rows[0]);
 }
 
-export async function listIdeas({ search = "", tag = "", status = "" } = {}) {
+const SORTS = {
+  newest: "datetime(created_at) DESC, id DESC",
+  oldest: "datetime(created_at) ASC, id ASC",
+  az: "LOWER(text) ASC, id ASC",
+};
+
+export async function listIdeas({ search = "", tag = "", status = "", sort = "newest" } = {}) {
   const where = [];
   const params = [];
 
@@ -140,13 +146,28 @@ export async function listIdeas({ search = "", tag = "", status = "" } = {}) {
     params.push(tag.trim().replace(/^#/, "").toLowerCase());
   }
 
+  const order = SORTS[sort] || SORTS.newest;
   const sql =
     "SELECT * FROM ideas" +
     (where.length ? " WHERE " + where.join(" AND ") : "") +
-    " ORDER BY (status = 'archived') ASC, datetime(created_at) DESC, id DESC";
+    ` ORDER BY (status = 'archived') ASC, ${order}`;
 
   const rows = await backend.query(sql, params);
   return rows.map(rowToIdea);
+}
+
+export async function countByStatus() {
+  const rows = await backend.query(
+    "SELECT status, COUNT(*) AS count FROM ideas GROUP BY status",
+    []
+  );
+  const out = { active: 0, done: 0, archived: 0, total: 0 };
+  for (const r of rows) {
+    const n = Number(r.count);
+    if (r.status in out) out[r.status] = n;
+    out.total += n;
+  }
+  return out;
 }
 
 export async function updateIdea(id, patch) {
