@@ -311,7 +311,7 @@ function ideaCard(idea, depth = 0) {
   const actions = el("div", { className: "idea-actions" });
 
   const work = el("button", { className: "work-btn", title: "Open the workspace: develop, plan, spec & chat" }, icon("layers"), "Work on");
-  work.addEventListener("click", () => openWorkspace(idea.id));
+  work.addEventListener("click", () => gotoWorkspace(idea.id));
   actions.append(work);
 
   if (state.aiEnabled) {
@@ -755,15 +755,41 @@ let wsIdea = null;
 let wsData = { messages: [], artifacts: [], kinds: [], aiEnabled: false };
 let wsView = "chat"; // "chat" | "streaming" | <artifactId>
 
+// ---- routing (#/idea/:id) ----
+function parseHash() {
+  const m = location.hash.match(/^#\/idea\/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+function gotoWorkspace(id) {
+  location.hash = `#/idea/${id}`;
+}
+function leaveWorkspace() {
+  if (parseHash() != null) {
+    if (history.length > 1) history.back();
+    else location.hash = "#/";
+  } else {
+    hideWorkspace();
+  }
+}
+function handleRoute() {
+  const id = parseHash();
+  if (id != null) {
+    if ($("#ws").hidden || !wsIdea || wsIdea.id !== id) openWorkspace(id);
+  } else if (!$("#ws").hidden) {
+    hideWorkspace();
+  }
+}
+
 async function openWorkspace(ideaId) {
   $("#ws").hidden = false;
   $("#ws").setAttribute("aria-hidden", "false");
   document.body.classList.add("ws-open");
-  $("#ws-idea-title").textContent = "Loading…";
-  $("#ws-detail").replaceChildren();
+  $("#ws-loading").hidden = false;
+  $("#ws-idea-title").textContent = "";
+  $("#ws-detail").hidden = true;
   $("#ws-actions").replaceChildren();
   $("#ws-doc-list").replaceChildren();
-  $("#ws-view").replaceChildren(el("div", { className: "loader" }, el("div", { className: "spinner" }), "Loading…"));
+  $("#ws-view").replaceChildren();
   try {
     const data = await api(`/api/ideas/${ideaId}/workspace`);
     wsIdea = data.idea;
@@ -785,15 +811,18 @@ async function openWorkspace(ideaId) {
     setViewChat();
   } catch (e) {
     toast(e.message, true);
-    closeWorkspace();
+    leaveWorkspace();
+  } finally {
+    $("#ws-loading").hidden = true;
   }
 }
 
-function closeWorkspace() {
+function hideWorkspace() {
   if (wsStream) {
     wsStream.abort();
     wsStream = null;
   }
+  wsIdea = null;
   $("#ws").hidden = true;
   $("#ws").setAttribute("aria-hidden", "true");
   document.body.classList.remove("ws-open");
@@ -886,24 +915,42 @@ function viewDoc(id) {
   renderDocList();
 }
 
+function typingDots() {
+  return el("div", { className: "typing" }, el("span"), el("span"), el("span"));
+}
+
 function generateArtifact(kind, title) {
   if (!wsData.aiEnabled) return;
   wsView = "streaming";
   const view = $("#ws-view");
   view.className = "ws-view doc";
-  const tail = streamingTail("generating…");
-  const head = el("div", { className: "ws-doc-head" }, el("h3", { textContent: title }), tail);
+  const head = el("div", { className: "ws-doc-head" }, el("h3", { textContent: title }));
+  const loading = el(
+    "div",
+    { className: "ws-doc-loading" },
+    el("span", { className: "spinner" }),
+    `Generating ${title.toLowerCase()}…`
+  );
+  const docWrap = el("div", { className: "ws-doc-view" });
   const pre = el("pre", { className: "ws-stream" });
-  view.replaceChildren(head, pre);
+  pre.hidden = true;
+  docWrap.append(pre);
+  view.replaceChildren(head, loading, docWrap);
   renderDocList();
 
   let buf = "";
+  let started = false;
   if (wsStream) wsStream.abort();
   wsStream = streamFetch(`/api/ideas/${wsIdea.id}/artifacts`, {
     method: "POST",
     body: { kind },
     handlers: {
       token: (d) => {
+        if (!started) {
+          started = true;
+          loading.remove();
+          pre.hidden = false;
+        }
         buf += d.text;
         pre.textContent = buf;
         view.scrollTop = view.scrollHeight;
@@ -917,7 +964,8 @@ function generateArtifact(kind, title) {
       },
       failed: (d) => {
         wsStream = null;
-        tail.remove();
+        loading.remove();
+        pre.hidden = false;
         pre.replaceChildren(el("p", { className: "ws-empty", textContent: d.message || "Generation failed." }));
       },
     },
@@ -931,14 +979,13 @@ function sendChat(message) {
   // Remove the hello placeholder if present.
   if (view.querySelector(".ws-hello")) view.replaceChildren();
   view.append(msgBubble("user", message));
-  const aRow = el("div", { className: "ws-msg-row assistant" });
-  const aBub = el("div", { className: "ws-msg assistant" });
-  aRow.append(aBub);
-  const tail = streamingTail("thinking…");
-  view.append(aRow, tail);
+  const aBub = el("div", { className: "ws-msg assistant" }, typingDots());
+  const aRow = el("div", { className: "ws-msg-row assistant" }, aBub);
+  view.append(aRow);
   view.scrollTop = view.scrollHeight;
 
   let buf = "";
+  let started = false;
   if (wsStream) wsStream.abort();
   wsStream = streamFetch(`/api/ideas/${wsIdea.id}/chat`, {
     method: "POST",
@@ -946,20 +993,22 @@ function sendChat(message) {
     handlers: {
       user: (m) => wsData.messages.push(m),
       token: (d) => {
+        if (!started) {
+          started = true;
+          aBub.replaceChildren();
+        }
         buf += d.text;
         aBub.textContent = buf;
         view.scrollTop = view.scrollHeight;
       },
       done: (d) => {
         wsStream = null;
-        tail.remove();
-        aBub.innerHTML = mdToHtml(buf);
+        aBub.innerHTML = mdToHtml(buf || "_(no response)_");
         if (d.message) wsData.messages.push(d.message);
         view.scrollTop = view.scrollHeight;
       },
       failed: (d) => {
         wsStream = null;
-        tail.remove();
         aBub.classList.add("err");
         aBub.textContent = d.message || "Something went wrong.";
       },
@@ -1077,7 +1126,7 @@ updateOnline();
 $("#panel-close").addEventListener("click", closePanel);
 $("#scrim").addEventListener("click", closePanel);
 
-$("#ws-close").addEventListener("click", closeWorkspace);
+$("#ws-close").addEventListener("click", leaveWorkspace);
 $("#ws-chat-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const input = $("#ws-chat-input");
@@ -1086,10 +1135,11 @@ $("#ws-chat-form").addEventListener("submit", (e) => {
   input.value = "";
   sendChat(msg);
 });
+window.addEventListener("hashchange", handleRoute);
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!$("#ws").hidden) closeWorkspace();
+  if (!$("#ws").hidden) leaveWorkspace();
   else if (!$("#panel").hidden) closePanel();
 });
 
@@ -1163,5 +1213,6 @@ if ("serviceWorker" in navigator) {
     /* non-fatal */
   }
   await refresh();
-  $("#idea-input").focus();
+  handleRoute(); // open the workspace if the URL points at one
+  if ($("#ws").hidden) $("#idea-input").focus();
 })();
