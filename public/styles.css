@@ -1411,3 +1411,51 @@ body.ws-open {
     opacity: 1;
   }
 }
+
+/* ---- workspace: empty hero + anchored composer (refinements) ---- */
+.ws {
+  height: 100dvh;
+  overflow: hidden;
+}
+.ws-hello {
+  max-width: 460px;
+  margin: auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.ws-hello-ic {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.ws-hello-ic .icon {
+  width: 26px;
+  height: 26px;
+}
+.ws-hello h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--text);
+}
+.ws-hello p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.ws-chat-form {
+  justify-content: center;
+  padding: 16px 22px calc(16px + env(safe-area-inset-bottom));
+}
+.ws-chat-form input {
+  flex: 1 1 760px;
+  max-width: 760px;
+}

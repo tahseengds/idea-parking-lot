@@ -755,24 +755,28 @@ let wsIdea = null;
 let wsData = { messages: [], artifacts: [], kinds: [], aiEnabled: false };
 let wsView = "chat"; // "chat" | "streaming" | <artifactId>
 
-// ---- routing (#/idea/:id) ----
-function parseHash() {
-  const m = location.hash.match(/^#\/idea\/(\d+)/);
+// ---- routing (/idea/:id) ----
+function parseRoute() {
+  const m = location.pathname.match(/^\/idea\/(\d+)\/?$/);
   return m ? Number(m[1]) : null;
 }
 function gotoWorkspace(id) {
-  location.hash = `#/idea/${id}`;
+  history.pushState({}, "", `/idea/${id}`);
+  handleRoute();
 }
 function leaveWorkspace() {
-  if (parseHash() != null) {
+  if (parseRoute() != null) {
     if (history.length > 1) history.back();
-    else location.hash = "#/";
+    else {
+      history.pushState({}, "", "/");
+      handleRoute();
+    }
   } else {
     hideWorkspace();
   }
 }
 function handleRoute() {
-  const id = parseHash();
+  const id = parseRoute();
   if (id != null) {
     if ($("#ws").hidden || !wsIdea || wsIdea.id !== id) openWorkspace(id);
   } else if (!$("#ws").hidden) {
@@ -892,7 +896,16 @@ function setViewChat() {
   const nodes = wsData.messages.map((m) => msgBubble(m.role, m.content));
   if (!nodes.length) {
     nodes.push(
-      el("p", { className: "ws-empty ws-hello" }, "Ask anything about this idea, or tell me how you'd like to develop it. Use the buttons on the left to generate plans, specs, and more.")
+      el(
+        "div",
+        { className: "ws-hello" },
+        el("div", { className: "ws-hello-ic" }, icon("layers")),
+        el("h3", { textContent: "Develop this idea" }),
+        el("p", {
+          textContent:
+            "Ask anything about it, or use the panel on the left to generate a plan, spec, business case, MVP scope and more. Everything you create stays saved here.",
+        })
+      )
     );
   }
   view.replaceChildren(...nodes);
@@ -1135,7 +1148,7 @@ $("#ws-chat-form").addEventListener("submit", (e) => {
   input.value = "";
   sendChat(msg);
 });
-window.addEventListener("hashchange", handleRoute);
+window.addEventListener("popstate", handleRoute);
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;

@@ -287,6 +287,12 @@ app.delete(
   })
 );
 
+// Client-side route: serve the app shell for /idea/:id (Vercel handles this via
+// a rewrite; this covers local dev and any direct function hit).
+app.get(/^\/idea\/\d+$/, (req, res) => {
+  res.sendFile(join(__dirname, "public", "index.html"));
+});
+
 // ---- error handling ------------------------------------------------------
 
 app.use((err, req, res, next) => {
