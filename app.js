@@ -12,7 +12,7 @@ import {
   allTags,
   countByStatus,
 } from "./db.js";
-import { aiEnabled, branchIdea, connectIdea } from "./ai.js";
+import { aiEnabled, branchIdea, connectIdea, streamBranches, streamConnections } from "./ai.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -123,6 +123,77 @@ app.post(
     }
 
     res.json({ connections: enriched, synthesis: result.synthesis || "" });
+  })
+);
+
+// ---- AI streaming (SSE) --------------------------------------------------
+
+function sseInit(res) {
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+}
+function sseSend(res, event, data) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+app.get(
+  "/api/ideas/:id/branch/stream",
+  wrap(async (req, res) => {
+    sseInit(res);
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    try {
+      if (!aiEnabled()) throw new Error("AI is not configured. Set FIREWORKS_API_KEY.");
+      const idea = await getIdea(Number(req.params.id));
+      if (!idea) throw new Error("Idea not found.");
+
+      for await (const b of streamBranches(idea, { signal: ac.signal })) {
+        if (res.writableEnded) break;
+        sseSend(res, "branch", b);
+      }
+      if (!res.writableEnded) sseSend(res, "done", {});
+    } catch (e) {
+      if (!ac.signal.aborted && !res.writableEnded) sseSend(res, "failed", { message: e.message });
+    }
+    if (!res.writableEnded) res.end();
+  })
+);
+
+app.get(
+  "/api/ideas/:id/connect/stream",
+  wrap(async (req, res) => {
+    sseInit(res);
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    try {
+      if (!aiEnabled()) throw new Error("AI is not configured. Set FIREWORKS_API_KEY.");
+      const idea = await getIdea(Number(req.params.id));
+      if (!idea) throw new Error("Idea not found.");
+
+      const all = await listIdeas({});
+      const others = all
+        .filter((o) => o.id !== idea.id && o.status !== "archived")
+        .map((o) => ({ id: o.id, text: o.text }));
+
+      for await (const e of streamConnections(idea, others, { signal: ac.signal })) {
+        if (res.writableEnded) break;
+        if (e.kind === "synthesis") {
+          sseSend(res, "synthesis", { text: e.text });
+        } else {
+          const related = await getIdea(e.relatedId);
+          if (related) sseSend(res, "connection", { relationship: e.relationship, idea: related });
+        }
+      }
+      if (!res.writableEnded) sseSend(res, "done", {});
+    } catch (e) {
+      if (!ac.signal.aborted && !res.writableEnded) sseSend(res, "failed", { message: e.message });
+    }
+    if (!res.writableEnded) res.end();
   })
 );
 

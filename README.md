@@ -14,8 +14,9 @@ Installable as a **PWA** and deployable to **Vercel**.
 - **Search & sort** — live full-text filter with a result count; sort by newest, oldest, or A–Z.
 - **Triage** — mark ideas **done**, **archive** them, or delete (with **Undo**). Per-status counts show on the filter chips, and your search/sort/filter view is remembered between visits.
 - **Export** — download everything as a Markdown file, grouped by status.
-- **AI · Branch ✦** — get ~5 adjacent concepts for any idea; save one or **Save all**.
-- **AI · Connect ⇄** — find non-obvious links between an idea and the rest of your lot, plus a synthesized idea that bridges them.
+- **AI · Branch ✦** — get ~5 adjacent concepts for any idea, **streamed in live** as they're generated; save one or **Save all**.
+- **AI · Connect ⇄** — find non-obvious links between an idea and the rest of your lot (also streamed), plus a synthesized idea that bridges them.
+- **Light & dark themes** — toggle in the header; remembers your choice and respects your system preference by default.
 - **PWA** — installable, with an offline-capable app shell and an offline indicator.
 
 ## Stack
@@ -92,8 +93,10 @@ of the app runs normally.
 | `DELETE` | `/api/ideas/:id`          | Delete an idea                               |
 | `GET`    | `/api/tags`               | All tags with counts                         |
 | `GET`    | `/api/stats`              | Idea counts by status                        |
-| `POST`   | `/api/ideas/:id/branch`   | AI: related concepts branching off           |
-| `POST`   | `/api/ideas/:id/connect`  | AI: connections to other ideas + synthesis   |
+| `POST`   | `/api/ideas/:id/branch`   | AI: related concepts (non-streaming)         |
+| `POST`   | `/api/ideas/:id/connect`  | AI: connections + synthesis (non-streaming)  |
+| `GET`    | `/api/ideas/:id/branch/stream`  | AI: branches streamed via SSE          |
+| `GET`    | `/api/ideas/:id/connect/stream` | AI: connections streamed via SSE       |
 
 `status` is one of `active`, `done`, `archived`.
 

@@ -337,41 +337,98 @@ function openPanel(title, sourceText) {
   $("#scrim").hidden = false;
 }
 
+let currentStream = null;
+
 function closePanel() {
+  if (currentStream) {
+    currentStream.close();
+    currentStream = null;
+  }
   $("#panel").hidden = true;
   $("#panel").setAttribute("aria-hidden", "true");
   $("#scrim").hidden = true;
 }
 
-async function openBranch(idea) {
-  openPanel("Branches", `“${idea.text}”`);
-  try {
-    const { branches } = await api(`/api/ideas/${idea.id}/branch`, { method: "POST" });
-    const body = $("#panel-body");
-    if (!branches.length) {
-      body.replaceChildren(el("p", { className: "panel-note" }, "No branches came back. Try again."));
-      return;
-    }
+// Open an SSE stream and route named events to handlers. `handlers` may include
+// any server event name plus `done` and `failed`.
+function streamPanel(url, handlers) {
+  if (currentStream) currentStream.close();
+  const es = new EventSource(url);
+  currentStream = es;
+  let finished = false;
+  const finish = () => {
+    finished = true;
+    es.close();
+    if (currentStream === es) currentStream = null;
+  };
 
-    const cards = branches.map((b) => suggestionCard(b));
-    const saveAllBtn = el("button", { textContent: "+ Save all" });
-    saveAllBtn.addEventListener("click", async () => {
-      saveAllBtn.disabled = true;
-      let saved = 0;
-      for (const card of cards) {
-        const btn = card.querySelector(".add-btn");
-        if (btn && !btn.classList.contains("added")) {
-          btn.click();
-          saved++;
-        }
-      }
-      saveAllBtn.textContent = saved ? `Saved ${saved} ✓` : "All saved";
-    });
-    const row = el("div", { className: "save-all-row" }, saveAllBtn);
-    body.replaceChildren(row, ...cards);
-  } catch (e) {
-    $("#panel-body").replaceChildren(el("p", { className: "panel-note" }, e.message));
+  for (const [name, fn] of Object.entries(handlers)) {
+    if (name === "done" || name === "failed") continue;
+    es.addEventListener(name, (ev) => fn(JSON.parse(ev.data)));
   }
+  es.addEventListener("done", () => {
+    finish();
+    handlers.done?.();
+  });
+  es.addEventListener("failed", (ev) => {
+    finish();
+    handlers.failed?.(JSON.parse(ev.data));
+  });
+  es.onerror = () => {
+    if (finished) return;
+    finish();
+    handlers.failed?.({ message: "Connection lost." });
+  };
+}
+
+function streamingTail(label) {
+  return el("div", { className: "loader stream-tail" }, el("div", { className: "spinner" }), label);
+}
+
+function openBranch(idea) {
+  openPanel("Branches", `“${idea.text}”`);
+  const body = $("#panel-body");
+  const cards = [];
+  let tail = null;
+
+  const saveAllBtn = el("button", { textContent: "+ Save all" });
+  saveAllBtn.addEventListener("click", () => {
+    saveAllBtn.disabled = true;
+    let saved = 0;
+    for (const card of cards) {
+      const btn = card.querySelector(".add-btn");
+      if (btn && !btn.classList.contains("added")) {
+        btn.click();
+        saved++;
+      }
+    }
+    saveAllBtn.textContent = saved ? `Saved ${saved} ✓` : "All saved";
+  });
+  const row = el("div", { className: "save-all-row" }, saveAllBtn);
+
+  streamPanel(`/api/ideas/${idea.id}/branch/stream`, {
+    branch: (b) => {
+      if (!cards.length) {
+        tail = streamingTail("generating…");
+        body.replaceChildren(row, tail);
+      }
+      const card = suggestionCard(b);
+      cards.push(card);
+      body.insertBefore(card, tail);
+    },
+    done: () => {
+      tail?.remove();
+      if (!cards.length) {
+        body.replaceChildren(el("p", { className: "panel-note" }, "No branches came back. Try again."));
+      }
+    },
+    failed: (d) => {
+      tail?.remove();
+      if (!cards.length) {
+        body.replaceChildren(el("p", { className: "panel-note" }, d.message || "Something went wrong."));
+      }
+    },
+  });
 }
 
 function suggestionCard(b) {
@@ -406,58 +463,69 @@ function suggestionCard(b) {
   );
 }
 
-async function openConnect(idea) {
-  openPanel("Connections", `“${idea.text}”`);
-  try {
-    const { connections, synthesis } = await api(`/api/ideas/${idea.id}/connect`, { method: "POST" });
-    const body = $("#panel-body");
-    const nodes = [];
+function synthesisCard(text) {
+  const addBtn = el("button", { className: "add-btn", textContent: "+ Save this" });
+  addBtn.addEventListener("click", async () => {
+    if (addBtn.classList.contains("added")) return;
+    try {
+      await api("/api/ideas", { method: "POST", body: { text, tags: ["synthesis"] } });
+      addBtn.classList.add("added");
+      addBtn.textContent = "Saved ✓";
+      refresh();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+  return el(
+    "div",
+    { className: "synthesis" },
+    el("div", { className: "label" }, "Synthesis"),
+    el("p", { textContent: text }),
+    addBtn
+  );
+}
 
-    if (!connections.length) {
-      nodes.push(
-        el("p", { className: "panel-note" }, "No strong connections to your other ideas yet — park a few more and try again.")
+function openConnect(idea) {
+  openPanel("Connections", `“${idea.text}”`);
+  const body = $("#panel-body");
+  let tail = streamingTail("looking for links…");
+  body.replaceChildren(tail);
+  let count = 0;
+  let synthEl = null;
+
+  streamPanel(`/api/ideas/${idea.id}/connect/stream`, {
+    connection: (c) => {
+      count++;
+      const node = el(
+        "div",
+        { className: "connection" },
+        el("div", { className: "conn-idea", textContent: c.idea.text }),
+        el("div", { className: "conn-rel", textContent: c.relationship })
       );
-    } else {
-      for (const c of connections) {
-        nodes.push(
-          el(
-            "div",
-            { className: "connection" },
-            el("div", { className: "conn-idea", textContent: c.idea.text }),
-            el("div", { className: "conn-rel", textContent: c.relationship })
-          )
+      body.insertBefore(node, tail);
+    },
+    synthesis: (s) => {
+      if (!s.text || !s.text.trim()) return;
+      synthEl = synthesisCard(s.text);
+      body.insertBefore(synthEl, tail);
+    },
+    done: () => {
+      tail?.remove();
+      tail = null;
+      if (!count && !synthEl) {
+        body.replaceChildren(
+          el("p", { className: "panel-note" }, "No strong connections to your other ideas yet — park a few more and try again.")
         );
       }
-    }
-
-    if (synthesis && synthesis.trim()) {
-      const addBtn = el("button", { className: "add-btn", textContent: "+ Save this" });
-      addBtn.addEventListener("click", async () => {
-        if (addBtn.classList.contains("added")) return;
-        try {
-          await api("/api/ideas", { method: "POST", body: { text: synthesis, tags: ["synthesis"] } });
-          addBtn.classList.add("added");
-          addBtn.textContent = "Saved ✓";
-          refresh();
-        } catch (e) {
-          toast(e.message, true);
-        }
-      });
-      nodes.push(
-        el(
-          "div",
-          { className: "synthesis" },
-          el("div", { className: "label" }, "Synthesis"),
-          el("p", { textContent: synthesis }),
-          addBtn
-        )
-      );
-    }
-
-    body.replaceChildren(...nodes);
-  } catch (e) {
-    $("#panel-body").replaceChildren(el("p", { className: "panel-note" }, e.message));
-  }
+    },
+    failed: (d) => {
+      tail?.remove();
+      tail = null;
+      if (!count && !synthEl) {
+        body.replaceChildren(el("p", { className: "panel-note" }, d.message || "Something went wrong."));
+      }
+    },
+  });
 }
 
 // ---- wiring --------------------------------------------------------------
@@ -572,6 +640,26 @@ $("#scrim").addEventListener("click", closePanel);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("#panel").hidden) closePanel();
 });
+
+// ---- theme ---------------------------------------------------------------
+
+const THEME_COLOR = { dark: "#11201d", light: "#eaece6" };
+function currentTheme() {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = THEME_COLOR[theme];
+  // Show the icon for the theme you'd switch TO.
+  $("#theme-toggle").textContent = theme === "light" ? "☾" : "☀";
+}
+$("#theme-toggle").addEventListener("click", () => {
+  const next = currentTheme() === "light" ? "dark" : "light";
+  localStorage.setItem("ipl-theme", next);
+  applyTheme(next);
+});
+applyTheme(currentTheme());
 
 // ---- boot ----------------------------------------------------------------
 
