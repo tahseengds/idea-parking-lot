@@ -1590,3 +1590,44 @@ body.ws-open {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ---- workspace: composer + content width refinements ---- */
+.ws-doc-wrap {
+  max-width: 880px;
+  margin: 0 auto;
+}
+/* content fills the centered wrapper (override earlier per-element caps) */
+.ws-view.doc .ws-doc-head,
+.ws-view.doc .ws-doc-view,
+.ws-view.doc .ws-doc-loading,
+.ws-doc-view {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+  width: auto;
+}
+.ws-msg-row {
+  max-width: 840px;
+}
+
+/* Composer blends into the page (no contrasting floating panel) */
+.ws-chat-form {
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  justify-content: center;
+  gap: 10px;
+}
+.ws-chat-form input {
+  flex: 1 1 880px;
+  max-width: 880px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 13px 16px;
+  box-shadow: var(--shadow-sm);
+}
+.ws-chat-form .btn.primary {
+  border-radius: 12px;
+  align-self: stretch;
+  padding: 0 18px;
+}

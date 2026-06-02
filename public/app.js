@@ -955,9 +955,13 @@ function viewDoc(id) {
   const doc = el("div", { className: "ws-doc-view" });
   doc.innerHTML = mdToHtml(a.content);
   view.replaceChildren(
-    backToConversation(),
-    el("div", { className: "ws-doc-head" }, el("h3", { textContent: a.title }), regen),
-    doc
+    el(
+      "div",
+      { className: "ws-doc-wrap" },
+      backToConversation(),
+      el("div", { className: "ws-doc-head" }, el("h3", { textContent: a.title }), regen),
+      doc
+    )
   );
   view.scrollTop = 0;
   renderDocs();
@@ -984,7 +988,7 @@ function generateArtifact(kind, title) {
   const pre = el("pre", { className: "ws-stream" });
   pre.hidden = true;
   docWrap.append(pre);
-  view.replaceChildren(backToConversation(), head, loading, docWrap);
+  view.replaceChildren(el("div", { className: "ws-doc-wrap" }, backToConversation(), head, loading, docWrap));
   renderDocs();
 
   let buf = "";
