@@ -668,6 +668,7 @@ $("#brand-mark").append(icon("target"));
 $("#search-ic").append(icon("search"));
 $("#panel-close").append(icon("close"));
 $("#export-btn").prepend(icon("download"));
+$("#empty-ic")?.append(icon("sparkle"));
 function currentTheme() {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }

@@ -51,6 +51,11 @@
 * {
   box-sizing: border-box;
 }
+/* The hidden attribute must win over component display rules (.panel/.toast
+   set display, which would otherwise override the UA [hidden] rule). */
+[hidden] {
+  display: none !important;
+}
 html,
 body {
   margin: 0;
@@ -572,8 +577,30 @@ main {
 .empty {
   text-align: center;
   color: var(--muted);
-  margin-top: 56px;
+  margin-top: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.empty p {
+  margin: 0;
   font-size: 15px;
+}
+.empty .empty-ic {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--faint);
+  box-shadow: var(--shadow-sm);
+}
+.empty .empty-ic .icon {
+  width: 30px;
+  height: 30px;
 }
 
 /* ---- AI panel ---- */
