@@ -689,6 +689,17 @@ applyTheme(currentTheme());
 // ---- boot ----------------------------------------------------------------
 
 if ("serviceWorker" in navigator) {
+  // When a new service worker takes control (after a deploy), reload once so the
+  // page picks up the fresh assets. Only for returning visitors that already had
+  // a controller — avoids a needless reload on first visit.
+  if (navigator.serviceWorker.controller) {
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+  }
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch(() => {
       /* offline support is best-effort */
@@ -697,6 +708,11 @@ if ("serviceWorker" in navigator) {
 }
 
 (async () => {
+  // Safety net: ensure the AI panel/scrim start hidden.
+  $("#panel").hidden = true;
+  $("#panel").setAttribute("aria-hidden", "true");
+  $("#scrim").hidden = true;
+
   // Restore the saved view into the controls.
   $("#search").value = state.search;
   $("#sort").value = state.sort;

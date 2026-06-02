@@ -1,6 +1,6 @@
-// Service worker: precache the app shell, serve it offline.
-// Bump CACHE when shell assets change to invalidate old caches.
-const CACHE = "ideas-shell-v1";
+// Service worker: network-first so new deploys always win; cache is an offline
+// fallback only. Bump CACHE to purge older caches.
+const CACHE = "ideas-shell-v3";
 const SHELL = [
   "/",
   "/index.html",
@@ -36,35 +36,37 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
       fetch(request).catch(
-        () => new Response(JSON.stringify({ error: "You're offline." }), {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        })
+        () =>
+          new Response(JSON.stringify({ error: "You're offline." }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          })
       )
     );
     return;
   }
 
-  // Navigations: network-first, fall back to the cached shell when offline.
-  if (request.mode === "navigate") {
+  // Same-origin shell: network-first, fall back to cache when offline.
+  if (url.origin === self.location.origin) {
     event.respondWith(
-      fetch(request).catch(() => caches.match("/index.html"))
-    );
-    return;
-  }
-
-  // Static assets: cache-first, then network (and cache the result).
-  event.respondWith(
-    caches.match(request).then(
-      (cached) =>
-        cached ||
-        fetch(request).then((res) => {
-          if (res.ok && url.origin === self.location.origin) {
+      fetch(request)
+        .then((res) => {
+          if (res.ok) {
             const copy = res.clone();
             caches.open(CACHE).then((cache) => cache.put(request, copy));
           }
           return res;
         })
-    )
-  );
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          if (request.mode === "navigate") return caches.match("/index.html");
+          return Response.error();
+        })
+    );
+    return;
+  }
+
+  // Cross-origin (e.g. fonts): just go to network.
+  event.respondWith(fetch(request).catch(() => caches.match(request)));
 });
