@@ -316,6 +316,12 @@ export async function createArtifact({ ideaId, kind, title, content = "" }) {
   return getArtifact(Number(info.lastInsertRowid));
 }
 
+// One document per (idea, kind): replace any existing doc of this kind.
+export async function upsertArtifact({ ideaId, kind, title, content = "" }) {
+  await backend.run("DELETE FROM artifacts WHERE idea_id = ? AND kind = ?", [Number(ideaId), kind]);
+  return createArtifact({ ideaId, kind, title, content });
+}
+
 export async function getArtifact(id) {
   const rows = await backend.query("SELECT * FROM artifacts WHERE id = ?", [id]);
   return rowToArtifact(rows[0]);

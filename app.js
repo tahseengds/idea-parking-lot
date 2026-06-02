@@ -11,7 +11,7 @@ import {
   deleteIdea,
   allTags,
   countByStatus,
-  createArtifact,
+  upsertArtifact,
   listArtifacts,
   deleteArtifact,
   addMessage,
@@ -264,7 +264,7 @@ app.post(
         sseSend(res, "token", { text: delta });
       }
       if (ac.signal.aborted) return;
-      const artifact = await createArtifact({
+      const artifact = await upsertArtifact({
         ideaId: idea.id,
         kind,
         title: artifactTitle(kind),

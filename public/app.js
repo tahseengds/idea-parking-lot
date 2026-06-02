@@ -39,6 +39,7 @@ const ICONS = {
   promote: '<path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
   send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>',
   doc: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  back: '<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
 };
 
 function icon(name) {
@@ -814,7 +815,6 @@ async function openWorkspace(ideaId) {
   $("#ws-loading").hidden = false;
   $("#ws-idea-title").textContent = "";
   $("#ws-detail").hidden = true;
-  $("#ws-actions").replaceChildren();
   $("#ws-doc-list").replaceChildren();
   $("#ws-view").replaceChildren();
   try {
@@ -833,8 +833,7 @@ async function openWorkspace(ideaId) {
     $("#ws-chat-input").placeholder = wsData.aiEnabled
       ? "Ask about this idea, or say how to develop it…"
       : "Set FIREWORKS_API_KEY to chat";
-    renderWsActions();
-    renderDocList();
+    renderDocs();
     setViewChat();
   } catch (e) {
     toast(e.message, true);
@@ -855,54 +854,55 @@ function hideWorkspace() {
   document.body.classList.remove("ws-open");
 }
 
-function renderWsActions() {
-  const wrap = $("#ws-actions");
-  wrap.replaceChildren(el("div", { className: "ws-actions-label", textContent: "Generate" }));
-  for (const k of wsData.kinds) {
-    const b = el("button", { className: "ws-gen-btn" }, icon("doc"), el("span", { textContent: k.title }));
-    b.disabled = !wsData.aiEnabled;
-    b.addEventListener("click", () => generateArtifact(k.kind, k.title));
-    wrap.append(b);
-  }
-  if (!wsData.aiEnabled) {
-    wrap.append(el("p", { className: "ws-note", textContent: "Set FIREWORKS_API_KEY to enable generation & chat." }));
-  }
-}
-
-function renderDocList() {
+// The 6 document types are fixed slots: one saved doc per kind. Generated ones
+// open their saved content; ungenerated ones generate on click.
+function renderDocs() {
   const list = $("#ws-doc-list");
-  if (!wsData.artifacts.length) {
-    list.replaceChildren(el("p", { className: "ws-empty", textContent: "No documents yet." }));
-    return;
-  }
-  list.replaceChildren(
-    ...wsData.artifacts.map((a) => {
-      const open = el(
-        "button",
-        { className: "ws-doc" + (wsView === a.id ? " active" : "") },
-        icon("doc"),
-        el("span", { className: "ws-doc-title", textContent: a.title }),
-        el("span", { className: "ws-doc-date", textContent: timeAgo(a.createdAt) })
+  const byKind = new Map();
+  for (const a of wsData.artifacts) if (!byKind.has(a.kind)) byKind.set(a.kind, a); // newest-first
+
+  const rows = wsData.kinds.map((k) => {
+    const existing = byKind.get(k.kind);
+    const btn = el(
+      "button",
+      { className: "ws-doc" + (existing ? " has" : "") + (existing && wsView === existing.id ? " active" : "") },
+      icon("doc"),
+      el("span", { className: "ws-doc-title", textContent: k.title })
+    );
+    if (existing) {
+      btn.append(el("span", { className: "ws-doc-badge", textContent: "Saved" }));
+      btn.title = "View saved document";
+      btn.addEventListener("click", () => viewDoc(existing.id));
+    } else {
+      btn.append(el("span", { className: "ws-doc-badge gen", textContent: wsData.aiEnabled ? "Generate" : "—" }));
+      btn.disabled = !wsData.aiEnabled;
+      btn.title = wsData.aiEnabled ? "Generate this document" : "Set FIREWORKS_API_KEY to generate";
+      btn.addEventListener("click", () => generateArtifact(k.kind, k.title));
+    }
+
+    const row = el("div", { className: "ws-doc-row" }, btn);
+    if (existing) {
+      row.append(
+        iconBtn(
+          "trash",
+          "Delete document",
+          async () => {
+            try {
+              await api(`/api/ideas/${wsIdea.id}/artifacts/${existing.id}`, { method: "DELETE" });
+              wsData.artifacts = wsData.artifacts.filter((x) => x.id !== existing.id);
+              if (wsView === existing.id) setViewChat();
+              else renderDocs();
+            } catch (e) {
+              toast(e.message, true);
+            }
+          },
+          "danger"
+        )
       );
-      open.addEventListener("click", () => viewDoc(a.id));
-      const del = iconBtn(
-        "trash",
-        "Delete document",
-        async () => {
-          try {
-            await api(`/api/ideas/${wsIdea.id}/artifacts/${a.id}`, { method: "DELETE" });
-            wsData.artifacts = wsData.artifacts.filter((x) => x.id !== a.id);
-            if (wsView === a.id) setViewChat();
-            renderDocList();
-          } catch (e) {
-            toast(e.message, true);
-          }
-        },
-        "danger"
-      );
-      return el("div", { className: "ws-doc-row" }, open, del);
-    })
-  );
+    }
+    return row;
+  });
+  list.replaceChildren(...rows);
 }
 
 function msgBubble(role, content) {
@@ -933,7 +933,11 @@ function setViewChat() {
   }
   view.replaceChildren(...nodes);
   view.scrollTop = view.scrollHeight;
-  renderDocList();
+  renderDocs();
+}
+
+function backToConversation() {
+  return el("button", { className: "ws-back", onclick: setViewChat }, icon("back"), "Back to conversation");
 }
 
 function viewDoc(id) {
@@ -942,13 +946,21 @@ function viewDoc(id) {
   wsView = id;
   const view = $("#ws-view");
   view.className = "ws-view doc";
-  const back = el("button", { className: "ws-back" }, "← Conversation");
-  back.addEventListener("click", setViewChat);
+
+  const regen = el("button", { className: "ws-regen" }, icon("undo"), "Regenerate");
+  regen.disabled = !wsData.aiEnabled;
+  regen.title = wsData.aiEnabled ? "Replace with a fresh version" : "Set FIREWORKS_API_KEY to regenerate";
+  regen.addEventListener("click", () => generateArtifact(a.kind, a.title));
+
   const doc = el("div", { className: "ws-doc-view" });
   doc.innerHTML = mdToHtml(a.content);
-  view.replaceChildren(el("div", { className: "ws-doc-head" }, el("h3", { textContent: a.title }), back), doc);
+  view.replaceChildren(
+    backToConversation(),
+    el("div", { className: "ws-doc-head" }, el("h3", { textContent: a.title }), regen),
+    doc
+  );
   view.scrollTop = 0;
-  renderDocList();
+  renderDocs();
 }
 
 function typingDots() {
@@ -957,6 +969,7 @@ function typingDots() {
 
 function generateArtifact(kind, title) {
   if (!wsData.aiEnabled) return;
+  const regenerating = wsData.artifacts.some((a) => a.kind === kind);
   wsView = "streaming";
   const view = $("#ws-view");
   view.className = "ws-view doc";
@@ -965,14 +978,14 @@ function generateArtifact(kind, title) {
     "div",
     { className: "ws-doc-loading" },
     el("span", { className: "spinner" }),
-    `Generating ${title.toLowerCase()}…`
+    `${regenerating ? "Regenerating" : "Generating"} ${title.toLowerCase()}…`
   );
   const docWrap = el("div", { className: "ws-doc-view" });
   const pre = el("pre", { className: "ws-stream" });
   pre.hidden = true;
   docWrap.append(pre);
-  view.replaceChildren(head, loading, docWrap);
-  renderDocList();
+  view.replaceChildren(backToConversation(), head, loading, docWrap);
+  renderDocs();
 
   let buf = "";
   let started = false;
@@ -994,6 +1007,8 @@ function generateArtifact(kind, title) {
       done: (d) => {
         wsStream = null;
         if (d.artifact) {
+          // One per kind: drop any previous doc of this kind, keep the new one.
+          wsData.artifacts = wsData.artifacts.filter((x) => x.kind !== d.artifact.kind);
           wsData.artifacts.unshift(d.artifact);
           viewDoc(d.artifact.id);
         }
@@ -1187,7 +1202,7 @@ const THEME_COLOR = { dark: "#0a0f1c", light: "#f4f6f9" };
 $("#brand-mark").append(icon("target"));
 $("#search-ic").append(icon("search"));
 $("#panel-close").append(icon("close"));
-$("#ws-close").append(icon("close"));
+$("#ws-close").prepend(icon("back"));
 $("#ws-chat-form button[type=submit]").append(icon("send"));
 $("#export-btn").prepend(icon("download"));
 $("#empty-ic")?.append(icon("sparkle"));

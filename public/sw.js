@@ -1,6 +1,6 @@
 // Service worker: network-first so new deploys always win; cache is an offline
 // fallback only. Bump CACHE to purge older caches.
-const CACHE = "ideas-shell-v7";
+const CACHE = "ideas-shell-v8";
 const SHELL = [
   "/",
   "/index.html",

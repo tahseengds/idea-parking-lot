@@ -1225,19 +1225,25 @@ body.ws-open {
   font-weight: 650;
 }
 .ws-back {
-  margin-left: auto;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
   color: var(--muted);
-  border-radius: 8px;
-  padding: 6px 12px;
+  padding: 4px 6px 4px 0;
+  margin-bottom: 14px;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   font-family: inherit;
 }
 .ws-back:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
+  color: var(--accent-strong);
+}
+.ws-back .icon {
+  width: 16px;
+  height: 16px;
 }
 .ws-stream {
   white-space: pre-wrap;
@@ -1507,4 +1513,80 @@ body.ws-open {
   .sk-pill {
     animation: none;
   }
+}
+
+/* ---- workspace: header back button, regenerate, doc badges ---- */
+.ws-backbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 9px;
+  padding: 8px 13px 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.ws-backbtn:hover {
+  border-color: var(--border-strong);
+}
+.ws-backbtn .icon {
+  width: 17px;
+  height: 17px;
+  color: var(--muted);
+}
+.ws-regen {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 9px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ws-regen:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+.ws-regen:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ws-regen .icon {
+  width: 15px;
+  height: 15px;
+}
+.ws-doc-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex: none;
+}
+.ws-doc-badge.gen {
+  color: var(--faint);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.ws-doc:not(.has) .icon {
+  color: var(--faint);
+}
+.ws-doc:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
