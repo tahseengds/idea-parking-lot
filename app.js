@@ -16,11 +16,20 @@ import { aiEnabled, branchIdea, connectIdea, streamBranches, streamConnections }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Initialise storage before the app handles any request.
-await initDb();
+// Kick off storage init once (idempotent). No top-level await — that can break
+// the serverless bundle; instead every request waits on this promise.
+const dbReady = initDb();
 
 const app = express();
 app.use(express.json());
+app.use(async (req, res, next) => {
+  try {
+    await dbReady;
+    next();
+  } catch (e) {
+    next(e);
+  }
+});
 app.use(express.static(join(__dirname, "public")));
 
 // Async handler wrapper → forwards rejections to the error middleware.

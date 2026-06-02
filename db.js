@@ -9,6 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 //   - libSQL (HTTP) → Turso/libSQL, persists on serverless (Vercel).
 // Selected by whether TURSO_DATABASE_URL / LIBSQL_URL is set.
 let backend = null;
+let initPromise = null;
 
 const LIBSQL_URL = process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "";
 
@@ -52,20 +53,24 @@ async function makeSqliteBackend() {
   };
 }
 
-export async function initDb() {
-  if (backend) return backend;
-  backend = LIBSQL_URL ? await makeLibsqlBackend() : await makeSqliteBackend();
-  await backend.exec(`
-    CREATE TABLE IF NOT EXISTS ideas (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      text       TEXT    NOT NULL,
-      tags       TEXT    NOT NULL DEFAULT '[]',
-      status     TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','done','archived')),
-      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  return backend;
+export function initDb() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      backend = LIBSQL_URL ? await makeLibsqlBackend() : await makeSqliteBackend();
+      await backend.exec(`
+        CREATE TABLE IF NOT EXISTS ideas (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          text       TEXT    NOT NULL,
+          tags       TEXT    NOT NULL DEFAULT '[]',
+          status     TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','done','archived')),
+          created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      return backend;
+    })();
+  }
+  return initPromise;
 }
 
 export function dbKind() {
