@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Idea Parking Lot</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#11201d" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ideas" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+
+    <!-- Apply saved/preferred theme before paint to avoid a flash. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("ipl-theme");
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          }
+          document.documentElement.dataset.theme = t;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="offline-banner" class="offline-banner" hidden>Offline — changes won't save until you reconnect.</div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">⌖</span>
+        <h1>Idea Parking Lot</h1>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☀</button>
+      </div>
+      <p class="tagline">Dump it now. Sort it later. Let the AI pull the threads.</p>
+    </header>
+
+    <main>
+      <!-- Capture -->
+      <section class="capture card">
+        <form id="capture-form" autocomplete="off">
+          <input
+            id="idea-input"
+            name="idea"
+            type="text"
+            placeholder="What's the idea?  (press Enter to park it)"
+            aria-label="New idea"
+            maxlength="500"
+          />
+          <input
+            id="tag-input"
+            name="tags"
+            type="text"
+            placeholder="tags, comma separated"
+            aria-label="Tags"
+          />
+          <button type="submit" class="btn primary">Park it</button>
+        </form>
+      </section>
+
+      <!-- Controls -->
+      <section class="controls">
+        <div class="search-wrap">
+          <input id="search" type="search" placeholder="Search ideas…" aria-label="Search" />
+        </div>
+        <div class="filters" id="status-filters" role="tablist" aria-label="Status filter">
+          <button class="chip active" data-status="">All</button>
+          <button class="chip" data-status="active">Active</button>
+          <button class="chip" data-status="done">Done</button>
+          <button class="chip" data-status="archived">Archived</button>
+        </div>
+        <select id="sort" class="sort-select" aria-label="Sort ideas" title="Sort">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="az">A–Z</option>
+        </select>
+        <button id="export-btn" class="chip" title="Export all ideas as Markdown">⤓ Export</button>
+      </section>
+
+      <div class="meta-row">
+        <span id="count" class="count-line"></span>
+        <span class="hint">Press <kbd>/</kbd> to capture</span>
+      </div>
+
+      <div id="tag-cloud" class="tag-cloud" aria-label="Tags"></div>
+
+      <!-- List -->
+      <section id="ideas" class="ideas" aria-live="polite"></section>
+      <p id="empty" class="empty" hidden>Nothing here yet. Park your first idea above.</p>
+    </main>
+
+    <!-- AI panel -->
+    <aside id="panel" class="panel" hidden aria-hidden="true">
+      <div class="panel-head">
+        <h2 id="panel-title">AI</h2>
+        <button id="panel-close" class="icon-btn" aria-label="Close panel">✕</button>
+      </div>
+      <p id="panel-source" class="panel-source"></p>
+      <div id="panel-body" class="panel-body"></div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
